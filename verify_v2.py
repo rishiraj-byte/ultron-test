@@ -1,5 +1,5 @@
 """
-verify_stage1.py -- the BUILD_SPEC_V2 stage-1 gate. No GUI, no UI, no subcortex.
+verify_v2.py -- the BUILD_SPEC_V2 stage gates. No GUI, no UI, no subcortex.
 
 Three things must be proven before anything else is written:
 
@@ -242,16 +242,93 @@ def gate5_ablation(cortex: Cortex) -> None:
         print(f"         DECORATIVE: {name} (cutting it changes nothing)")
 
 
+
+def gate6_unpooled(cortex: Cortex) -> None:
+    """STAGE 2 -- the encoders stop pooling."""
+    rule("GATE 6  UN-POOLED SENSORY TAPS (stage 2)")
+    print("v1 pooled every encoder to one vector, deleting exactly the")
+    print("structure parietal and temporal exist to exploit. The gate: parietal")
+    print("must receive real spatial positions, temporal a real sequence.\n")
+
+    import numpy as np
+    from PIL import Image
+
+    from modules.encoders import EncoderBank
+    from modules.sensory import SensoryFront
+
+    front = SensoryFront(EncoderBank())
+    streams = front.encode_all({
+        "image": Image.new("RGB", (224, 224), (110, 140, 90)),
+        "text": "the rocket reached orbit safely today",
+        "audio": (0.4 * np.sin(2 * np.pi * 440 *
+                               np.linspace(0, 1, config.AUDIO_SAMPLE_RATE))).astype("float32"),
+        "sensor": np.random.rand(config.SENSOR_RAW_DIM).astype("float32"),
+    })
+
+    print(f"    {'modality':<10}{'shape':<22}{'axis means'}")
+    print("    " + "-" * 56)
+    for modality, stream in streams.items():
+        print(f"    {modality:<10}{str(tuple(stream.tokens.shape)):<22}{stream.kind}")
+
+    check("vision keeps the 7x7 grid = 49 positions",
+          streams["image"].positions == 49, f"{streams['image'].positions}")
+    check("text is a real token sequence", streams["text"].positions > 1,
+          f"{streams['text'].positions} tokens")
+    check("audio is a real frame sequence", streams["audio"].positions > 1,
+          f"{streams['audio'].positions} frames")
+    check("sensor is 8 beam directions",
+          streams["sensor"].positions == config.SENSOR_BEAMS)
+    check("every stream is LATENT_DIM per position",
+          all(s.tokens.shape[-1] == config.LATENT_DIM for s in streams.values()))
+
+    print("\n-- the operators must USE the structure, not just receive it --")
+    grid = streams["image"].tokens
+    x = torch.zeros(grid.shape[0], config.LATENT_DIM, device=grid.device)
+
+    with torch.no_grad():
+        # Shuffling positions must change parietal's answer. If it did not,
+        # attention would be ignoring the arrangement it exists to read.
+        forward = cortex.lobes["parietal"](x, grid)
+        shuffled = cortex.lobes["parietal"](x, grid[:, torch.randperm(grid.shape[1])])
+        spatial_gap = float((forward - shuffled).abs().max())
+
+        # Reversing a sequence must change temporal's answer, for the same
+        # reason: a GRU that ignores order is an MLP wearing a costume.
+        tokens = streams["text"].tokens
+        y = torch.zeros(tokens.shape[0], config.LATENT_DIM, device=tokens.device)
+        ordered = cortex.lobes["temporal"](y, tokens)
+        reversed_ = cortex.lobes["temporal"](y, torch.flip(tokens, dims=[1]))
+        order_gap = float((ordered - reversed_).abs().max())
+
+    check("parietal is sensitive to spatial arrangement", spatial_gap > 1e-4,
+          f"shuffle changes output by {spatial_gap:.4f}")
+    check("temporal is sensitive to sequence order", order_gap > 1e-4,
+          f"reversal changes output by {order_gap:.4f}")
+
+    print("\n-- and the loop still settles on real sensory input --")
+    sensory = {f"thal.{n}": s.summary() for n, s in
+               (("LGN", streams["image"]), ("MGN", streams["audio"]),
+                ("VPL", streams["sensor"]), ("PULVINAR", streams["text"]))}
+    sequences = {"occipital": streams["image"].tokens,
+                 "parietal": streams["image"].tokens,
+                 "temporal": streams["text"].tokens}
+    with torch.no_grad():
+        trace = cortex.settle(sensory, sequences=sequences)
+    print(f"    deltas  {' '.join(f'{d:5.1f}' for d in trace.deltas)}")
+    check("settles with real sequences", trace.settled(),
+          f"ratio {trace.settling_ratio():.3f}")
+
+
 # ---------------------------------------------------------------------------
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gate", type=int, choices=(1, 2, 3, 4, 5))
+    parser.add_argument("--gate", type=int, choices=(1, 2, 3, 4, 5, 6))
     args = parser.parse_args()
 
     print("=" * 78)
-    print("BUILD_SPEC_V2  STAGE 1 GATE -- parallel settling cortex")
+    print("BUILD_SPEC_V2  STAGE GATES")
     print("=" * 78)
     print(f"LATENT_DIM      {config.LATENT_DIM}")
     print(f"T_STEPS         {config.T_STEPS}")
@@ -264,7 +341,7 @@ def main() -> int:
           f"({', '.join(f'{k} {v:,}' for k, v in counts.items())})")
 
     gates = {1: gate1_shapes, 2: gate2_parallelism, 3: gate3_settling,
-             4: gate4_gradients, 5: gate5_ablation}
+             4: gate4_gradients, 5: gate5_ablation, 6: gate6_unpooled}
     for number in ([args.gate] if args.gate else sorted(gates)):
         gates[number](cortex)
 

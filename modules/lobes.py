@@ -10,10 +10,35 @@ borrowed.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 
 import config
+
+
+
+def sinusoidal_positions(n: int, dim: int, device) -> torch.Tensor:
+    """Standard sinusoidal position codes, (1, n, dim).
+
+    Needed because self-attention is permutation-EQUIVARIANT and a mean over
+    positions afterwards makes the whole operation permutation-INVARIANT.
+    Without position codes the 49 image patches are a BAG of features, not a
+    grid, and "left of" remains inexpressible -- which is precisely the
+    capability parietal exists to provide. Measured before this was added:
+    shuffling all 49 positions changed parietal's output by exactly 0.0000.
+
+    Sinusoidal rather than a learned table so any N works -- 49 image patches,
+    8 sensor beams, 64 audio frames -- with no size cap to maintain.
+    """
+    position = torch.arange(n, device=device, dtype=torch.float32).unsqueeze(1)
+    index = torch.arange(0, dim, 2, device=device, dtype=torch.float32)
+    freq = torch.exp(-math.log(10000.0) * index / dim)
+    code = torch.zeros(n, dim, device=device)
+    code[:, 0::2] = torch.sin(position * freq)
+    code[:, 1::2] = torch.cos(position * freq)[:, : code[:, 1::2].shape[1]]
+    return code.unsqueeze(0)
 
 
 class Lobe(nn.Module):
@@ -134,10 +159,30 @@ class OccipitalLobe(Lobe):
         )
         self.mix = nn.Linear(dim, dim)      # cross-band integration
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor,
+                sequence: torch.Tensor | None = None) -> torch.Tensor:
         x = self._check(x)
         h = self.net(self.norm(x).unsqueeze(-1)).squeeze(-1)
-        return x + self.mix(h)
+        out = x + self.mix(h)
+        if sequence is not None:
+            out = out + self.receptive_fields(sequence)
+        return out
+
+    def receptive_fields(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Grouped local filtering at EVERY real spatial position.
+
+        (B, N, D) -> grouped conv independently per position -> pooled (B, D).
+
+        This is what the grouped operator was always for. In v1 it ran on a
+        single pooled vector, so "local receptive field" described bands of an
+        abstract 256-vector rather than regions of an image. Now N is 49 actual
+        patches of the ResNet grid and locality means what it says.
+        """
+        b, n, d = sequence.shape
+        flat = sequence.reshape(b * n, d).unsqueeze(-1)
+        filtered = self.net(self.norm(sequence.reshape(b * n, d)).unsqueeze(-1))
+        filtered = filtered.squeeze(-1).reshape(b, n, d)
+        return self.mix(filtered.mean(dim=1))
 
 
 class ParietalLobe(Lobe):
@@ -174,15 +219,41 @@ class ParietalLobe(Lobe):
             embed_dim=self.slot, num_heads=1, dropout=dropout, batch_first=True
         )
         self.attn_norm = nn.LayerNorm(self.slot)
+        # Attention over REAL sensory positions (stage 2), separate from the
+        # slot attention above which operates on the recurrent state.
+        self.grid_attn = nn.MultiheadAttention(
+            embed_dim=dim, num_heads=4, dropout=dropout, batch_first=True
+        )
+        self.grid_norm = nn.LayerNorm(dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor,
+                sequence: torch.Tensor | None = None) -> torch.Tensor:
         x = self._check(x)
         b = x.shape[0]
         # (B, dim) -> (B, positions, slot): the latent as a row of places
         grid = self.attn_norm(self.norm(x).view(b, self.positions, self.slot))
         attended, _ = self.attn(grid, grid, grid, need_weights=False)
         x = x + attended.reshape(b, self.dim)
+        if sequence is not None:
+            x = x + self.spatial_attention(sequence)
         return x + self.net(self.norm(x))
+
+    def spatial_attention(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Attend across REAL positions -- the 49 patches of the ResNet grid.
+
+        This is the operator finally getting the data it was built for. In v1
+        it attended over 16 arbitrary slices of a pooled vector, which carry no
+        spatial relationship at all; "left of" was not expressible because
+        there was no left. Here position j genuinely is a different place in
+        the image from position k.
+        """
+        # Position codes FIRST, or the whole operation is permutation-invariant
+        # and the arrangement it is supposed to read is invisible to it.
+        placed = sequence + sinusoidal_positions(
+            sequence.shape[1], sequence.shape[2], sequence.device
+        )
+        attended, _ = self.grid_attn(placed, placed, placed, need_weights=False)
+        return self.grid_norm(attended).mean(dim=1)
 
 
 class TemporalLobe(Lobe):
@@ -218,14 +289,33 @@ class TemporalLobe(Lobe):
             hidden_size=self.step_dim,
             batch_first=True,
         )
+        # GRU over the REAL sensory sequence (stage 2), separate from the
+        # slot-recurrence above which operates on the recurrent state.
+        self.seq_rnn = nn.GRU(input_size=dim, hidden_size=dim, batch_first=True)
+        self.seq_norm = nn.LayerNorm(dim)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor,
+                sequence: torch.Tensor | None = None) -> torch.Tensor:
         x = self._check(x)
         b = x.shape[0]
         seq = self.norm(x).view(b, self.steps, self.step_dim)
         out, _ = self.rnn(seq)
         x = x + out.reshape(b, self.dim)
+        if sequence is not None:
+            x = x + self.read_sequence(sequence)
         return x + self.net(self.norm(x))
+
+    def read_sequence(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Run the REAL token or frame sequence through a GRU.
+
+        v1 chopped one pooled vector into 8 pretend "timesteps" whose order was
+        an artefact of how the dimensions happened to be laid out. Here the
+        sequence is genuinely temporal: MiniLM tokens in reading order, or
+        Whisper frames in time order. Reversing it now changes the answer,
+        which is the whole point of using a recurrent operator.
+        """
+        out, hidden = self.seq_rnn(sequence)
+        return self.seq_norm(hidden[-1])
 
 
 class FrontalLobe(Lobe):

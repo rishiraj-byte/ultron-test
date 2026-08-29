@@ -176,7 +176,8 @@ class Cortex(nn.Module):
         """
         return self.tracts.deliver(lobe, history, t)
 
-    def _step_lobe(self, lobe: str, history: StateHistory, t: int) -> torch.Tensor:
+    def _step_lobe(self, lobe: str, history: StateHistory, t: int,
+                   sequences: dict[str, torch.Tensor] | None = None) -> torch.Tensor:
         """Compute ONE lobe for timestep t. Reads only t-1 and earlier.
 
         Frontal is the exception in form but not in principle: it takes its
@@ -198,7 +199,13 @@ class Cortex(nn.Module):
             fused = self.lobes["frontal"](streams)
             return fused + carried
 
-        return self.lobes[lobe](self._drive(lobe, history, t))
+        # Stage 2: the un-pooled sensory sequence reaches the lobe whose
+        # operator was built to exploit it -- 49 real image positions to
+        # parietal's attention, a real token or frame sequence to temporal's
+        # GRU. Pooling this away was what made both operators inert in v1.
+        drive = self._drive(lobe, history, t)
+        sequence = (sequences or {}).get(lobe)
+        return self.lobes[lobe](drive, sequence)
 
     # ------------------------------------------------------------------
     def settle(
@@ -206,8 +213,14 @@ class Cortex(nn.Module):
         sensory: dict[str, torch.Tensor],
         steps: int = config.T_STEPS,
         order: tuple[str, ...] | None = None,
+        sequences: dict[str, torch.Tensor] | None = None,
     ) -> SettleTrace:
         """Run the loop. `sensory` maps "thal.<NUCLEUS>" -> (B, dim).
+
+        `sequences` maps a LOBE name to its un-pooled sensory sequence
+        (B, N, dim) -- 49 image positions for occipital and parietal, tokens or
+        frames for temporal. Constant across the settling window: one percept
+        is being integrated.
 
         `order` exists ONLY so verify.py can shuffle it and prove the result
         does not depend on it. Nothing in normal operation should pass it.
@@ -238,7 +251,8 @@ class Cortex(nn.Module):
             # Computed into a staging dict and only then committed. Nothing
             # written here is visible to anything else in this loop body, so
             # `lobes` may be in any order and the result is identical.
-            fresh = {lobe: self._step_lobe(lobe, history, t) for lobe in lobes}
+            fresh = {lobe: self._step_lobe(lobe, history, t, sequences)
+                     for lobe in lobes}
 
             # Leaky integration toward the new drive, not replacement by it.
             # This is the membrane time constant, and it is what makes the loop

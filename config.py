@@ -55,6 +55,13 @@ AUDIO_MAX_SECONDS = 30       # whisper's fixed receptive window
 
 TEXT_MAX_TOKENS = 256
 
+# Whisper emits 1500 frames for 30 s. Running all of them through a GRU on
+# every one of T settling timesteps is 12000 recurrent steps per percept, for a
+# signal that is highly redundant frame to frame. Strided mean-pooling down to
+# this many keeps order, onsets and duration -- it is downsampling, not the
+# pooling-to-a-point that v1 did.
+AUDIO_FRAMES = 64
+
 # ---------------------------------------------------------------------------
 # Thalamic routing table (PROJECT.md section 2.3)
 #
