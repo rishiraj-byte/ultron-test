@@ -15,7 +15,13 @@ shaped the way it is. This file is how to run it.
 pip install -r requirements.txt
 ```
 
-Prove the wiring before anything else:
+See what it does — a scripted walkthrough, every number computed live:
+
+```bash
+python demo.py
+```
+
+Prove the wiring:
 
 ```bash
 python verify.py
@@ -52,7 +58,10 @@ python -c "from benchmark import data; [data.get(t) for t in ('cifar100','news20
 | File | Does |
 |---|---|
 | `config.py` | `LATENT_DIM` and every shape derived from it. Change shapes **here only**. |
-| `verify.py` | Terminal proof that tensors flow. No GUI. Start here. |
+| `demo.py` | Scripted walkthrough. Run this in front of people. |
+| `verify.py` | Terminal proof that tensors flow. No GUI. |
+| `explain.py` | 18 checks that each stage genuinely works, not just runs. |
+| `modules/language.py` | Language production. Speaks what the lobes perceived. |
 | `desktop_app.py` | The dashboard: minimised view + expanded view. |
 | `train.py` | Multi-task pretraining: vision, language, navigation, acoustic. |
 | `benchmark/` | GridNav task, baselines, ablation harness, LaTeX tables. |
