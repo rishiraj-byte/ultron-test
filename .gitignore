@@ -1,0 +1,21 @@
+# Cached frozen-encoder features. 648 MB, and fully reproducible:
+#   python -c "from benchmark import data; [data.get(t) for t in ('cifar100','news20','gridnav','audiotone')]"
+data/
+
+# Trained weights. 8.8 MB and reproducible in ~4 minutes via train.py, so it
+# stays out of history -- but see README if you want to ship one.
+checkpoints/*.pt
+checkpoints/*.stale
+
+# Experiment output
+results/*.json
+results/*.log
+
+# Screenshots are regenerated; keep the two the README references.
+assets/*.png
+!assets/shot_minimised.png
+!assets/shot_expanded.png
+
+__pycache__/
+*.pyc
+.venv/

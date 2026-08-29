@@ -1,0 +1,168 @@
+% ---------------------------------------------------------------------------
+% refs.bib
+%
+% These are starting points, not a finished bibliography. Every entry below is
+% a well-known work whose details I have stated as accurately as I can, but
+% VERIFY EACH ONE against the publisher's record before submitting -- page
+% numbers, volume numbers and venue abbreviations are exactly the fields that
+% go stale or get mis-transcribed, and a reviewer who spots a wrong citation
+% will distrust the rest.
+%
+% Gaps you still need to fill, listed in the order the Related Work section
+% will need them:
+%   * recent modular / mixture-of-experts work from the last two years
+%   * multimodal fusion surveys
+%   * embodied navigation benchmarks (Habitat, MiniGrid, and similar)
+%   * continual learning and modularity
+%   * any prior system that names cortical regions -- this is the work the
+%     paper positions against, so it must be cited fairly and specifically
+% ---------------------------------------------------------------------------
+
+% --- conditional computation / mixture of experts ---------------------------
+
+@inproceedings{shazeer2017moe,
+  author    = {Noam Shazeer and Azalia Mirhoseini and Krzysztof Maziarz and
+               Andy Davis and Quoc Le and Geoffrey Hinton and Jeff Dean},
+  title     = {Outrageously Large Neural Networks: The Sparsely-Gated
+               Mixture-of-Experts Layer},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2017}
+}
+
+@article{jacobs1991experts,
+  author  = {Robert A. Jacobs and Michael I. Jordan and Steven J. Nowlan and
+             Geoffrey E. Hinton},
+  title   = {Adaptive Mixtures of Local Experts},
+  journal = {Neural Computation},
+  volume  = {3},
+  number  = {1},
+  pages   = {79--87},
+  year    = {1991}
+}
+
+% --- modular and compositional networks -------------------------------------
+
+@inproceedings{andreas2016nmn,
+  author    = {Jacob Andreas and Marcus Rohrbach and Trevor Darrell and
+               Dan Klein},
+  title     = {Neural Module Networks},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition
+               (CVPR)},
+  year      = {2016}
+}
+
+@inproceedings{goyal2021rim,
+  author    = {Anirudh Goyal and Alex Lamb and Jordan Hoffmann and
+               Shagun Sodhani and Sergey Levine and Yoshua Bengio and
+               Bernhard Sch{\"o}lkopf},
+  title     = {Recurrent Independent Mechanisms},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2021}
+}
+
+% --- architectural components used here -------------------------------------
+
+@inproceedings{he2016resnet,
+  author    = {Kaiming He and Xiangyu Zhang and Shaoqing Ren and Jian Sun},
+  title     = {Deep Residual Learning for Image Recognition},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition
+               (CVPR)},
+  year      = {2016}
+}
+
+@inproceedings{vaswani2017attention,
+  author    = {Ashish Vaswani and Noam Shazeer and Niki Parmar and
+               Jakob Uszkoreit and Llion Jones and Aidan N. Gomez and
+               Lukasz Kaiser and Illia Polosukhin},
+  title     = {Attention Is All You Need},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2017}
+}
+
+@inproceedings{cho2014gru,
+  author    = {Kyunghyun Cho and Bart van Merri{\"e}nboer and Caglar Gulcehre
+               and Dzmitry Bahdanau and Fethi Bougares and Holger Schwenk and
+               Yoshua Bengio},
+  title     = {Learning Phrase Representations using {RNN} Encoder--Decoder
+               for Statistical Machine Translation},
+  booktitle = {Conference on Empirical Methods in Natural Language Processing
+               (EMNLP)},
+  year      = {2014}
+}
+
+@inproceedings{reimers2019sbert,
+  author    = {Nils Reimers and Iryna Gurevych},
+  title     = {Sentence-{BERT}: Sentence Embeddings using Siamese
+               {BERT}-Networks},
+  booktitle = {Conference on Empirical Methods in Natural Language Processing
+               (EMNLP)},
+  year      = {2019}
+}
+
+@inproceedings{radford2023whisper,
+  author    = {Alec Radford and Jong Wook Kim and Tao Xu and Greg Brockman and
+               Christine McLeavey and Ilya Sutskever},
+  title     = {Robust Speech Recognition via Large-Scale Weak Supervision},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2023}
+}
+
+% --- datasets ---------------------------------------------------------------
+
+@techreport{krizhevsky2009cifar,
+  author      = {Alex Krizhevsky},
+  title       = {Learning Multiple Layers of Features from Tiny Images},
+  institution = {University of Toronto},
+  year        = {2009}
+}
+
+@inproceedings{lang1995newsweeder,
+  author    = {Ken Lang},
+  title     = {{NewsWeeder}: Learning to Filter Netnews},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {1995}
+}
+
+% --- neuroscience -----------------------------------------------------------
+% These support the anatomical claims in Section III. Cite them where the
+% architecture asserts a biological correspondence, not decoratively.
+
+@article{goodale1992twostreams,
+  author  = {Melvyn A. Goodale and A. David Milner},
+  title   = {Separate Visual Pathways for Perception and Action},
+  journal = {Trends in Neurosciences},
+  volume  = {15},
+  number  = {1},
+  pages   = {20--25},
+  year    = {1992}
+}
+
+@book{sherman2006thalamus,
+  author    = {S. Murray Sherman and R. W. Guillery},
+  title     = {Exploring the Thalamus and Its Role in Cortical Function},
+  publisher = {MIT Press},
+  edition   = {2nd},
+  year      = {2006}
+}
+
+@article{alexander1986basalganglia,
+  author  = {Garrett E. Alexander and Mahlon R. DeLong and
+             Peter L. Strick},
+  title   = {Parallel Organization of Functionally Segregated Circuits
+             Linking Basal Ganglia and Cortex},
+  journal = {Annual Review of Neuroscience},
+  volume  = {9},
+  pages   = {357--381},
+  year    = {1986}
+}
+
+@article{hubel1962receptive,
+  author  = {David H. Hubel and Torsten N. Wiesel},
+  title   = {Receptive Fields, Binocular Interaction and Functional
+             Architecture in the Cat's Visual Cortex},
+  journal = {The Journal of Physiology},
+  volume  = {160},
+  number  = {1},
+  pages   = {106--154},
+  year    = {1962}
+}

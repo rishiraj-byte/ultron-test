@@ -1,0 +1,36 @@
+# Brain-Inspired AI -- dependencies
+#
+# Versions below are what this build was developed and verified against on
+# Windows 11 / Python 3.13 / CPU. Nothing here needs a GPU.
+
+# --- required -------------------------------------------------------------
+torch==2.13.0                 # the networks themselves
+torchvision==0.28.0           # ResNet-18 + its pretrained ImageNet weights
+numpy>=2.0                    # activation -> heatmap conversion
+pillow>=10.0                  # image loading, heatmap rendering into Tk
+
+# --- required for the text and audio paths --------------------------------
+transformers>=5.0             # all-MiniLM-L6-v2 (text), whisper-tiny (audio)
+
+# --- required for the dashboard -------------------------------------------
+psutil>=6.0                   # CPU / RAM telemetry in the right-hand panel
+
+# --- optional -------------------------------------------------------------
+opencv-python>=4.9            # video decoding + MSER text-region detection
+                              # (modules/decompose.py degrades gracefully
+                              #  without it: image/text/audio still work)
+
+# tkinter is NOT pip-installable. It ships with the python.org Windows and
+# macOS installers. On Debian/Ubuntu: sudo apt install python3-tk
+#
+# NOT required, deliberately:
+#   sentence-transformers  -- encoders.py calls MiniLM through plain
+#                             transformers so the pooling stays explicit
+#   torchaudio / soundfile -- .wav is read with the stdlib `wave` module.
+#                             Other audio containers need one of these, or
+#                             convert first:
+#                               ffmpeg -i in.mp3 -ac 1 -ar 16000 out.wav
+#
+# GPU: install the CUDA build of torch from https://pytorch.org to use one.
+# The default wheel above is CPU-only; the dashboard's system panel will tell
+# you if a CUDA card is present but unused.

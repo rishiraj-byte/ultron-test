@@ -1,0 +1,403 @@
+%% ---------------------------------------------------------------------------
+%% Brain-Inspired Modular AI -- IEEE conference paper
+%%
+%% Build:
+%%     python -m benchmark.run          produces results/results.json
+%%     python -m benchmark.tables       produces paper/generated/*.tex
+%%     pdflatex main && bibtex main && pdflatex main && pdflatex main
+%%
+%% NOTHING IN THE RESULTS SECTION IS TYPED BY HAND. Every number arrives via
+%% \input{generated/...}, so the text cannot drift from results.json after a
+%% rerun. Sentences that INTERPRET the numbers are marked \todo{} and must be
+%% written only after looking at them -- see the note above Section VI.
+%% ---------------------------------------------------------------------------
+
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{url}
+
+% Visible reminders that a claim still needs a number behind it.
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\begin{document}
+
+\title{Functionally Specialised Cortical Modules for Multimodal\\
+       and Embodied Navigation}
+
+\author{\IEEEauthorblockN{Rishiraj Chakraborty}
+\IEEEauthorblockA{\textit{\todo{affiliation}} \\
+\todo{city, country} \\
+chakrabortyrishiraj09@gmail.com}}
+
+\maketitle
+
+% ---------------------------------------------------------------------------
+\begin{abstract}
+Conventional neural systems process heterogeneous inputs with a single
+monolithic network. The mammalian cortex does not: distinct regions carry
+distinct computational structure, a thalamic switchboard relays each sensory
+modality to its own target, and damage to one region degrades some abilities
+while sparing others. We ask whether that organisation is worth reproducing in
+an artificial system, or whether it is only a biological accident.
+%
+We present a modular architecture in which four cortical modules are separate
+networks with \emph{different inductive biases} -- locally connected
+(occipital), relational self-attention (parietal), recurrent (temporal), and
+convergent fusion (frontal) -- addressed by a modality-keyed thalamic relay and
+gated by a basal-ganglia go/no-go mechanism. We evaluate on an embodied
+navigation task in which vision, proprioceptive rangefinding and natural-language
+instruction are each individually insufficient, plus two single-modality
+control tasks.
+%
+Against parameter-matched baselines that remove exactly one property at a time
+-- routing, specialisation, or modularity itself -- we measure accuracy,
+tolerance to module lesion and sensor failure, and inference cost.
+\todo{one-sentence headline result, written after the numbers exist}
+\end{abstract}
+
+\begin{IEEEkeywords}
+modular neural networks, brain-inspired architectures, multimodal fusion,
+embodied navigation, conditional computation, damage tolerance
+\end{IEEEkeywords}
+
+% ---------------------------------------------------------------------------
+\section{Introduction}
+
+A single feedforward network applied to concatenated inputs is the default
+design for multimodal systems. It is also the design the brain conspicuously
+does not use. Cortex is regionally specialised: primary visual cortex is
+retinotopic and locally connected; posterior parietal cortex computes
+relations between locations; temporal cortex handles sequence and meaning;
+prefrontal cortex integrates and decides. Sensory input does not enter through
+one door but through modality-specific thalamic nuclei -- the lateral
+geniculate for vision, the medial geniculate for audition, the ventral
+posterior nuclei for somatosensation.
+
+Whether this organisation confers a computational advantage, as opposed to
+being a developmental or metabolic constraint, is an empirical question that
+architectural work in machine learning rarely tests directly. Systems
+described as ``brain-inspired'' frequently reproduce the \emph{names} of
+cortical regions while implementing identical subnetworks, in which case the
+biological framing is decorative and any result is attributable to capacity
+rather than structure.
+
+This paper takes the opposite approach. We make the modules structurally
+different, hold parameters constant, and remove one property at a time.
+
+\textbf{Contributions.}
+\begin{enumerate}
+  \item A modular architecture in which each cortical module carries a
+        \emph{distinct} inductive bias matched to the structure of the signal
+        routed to it, rather than a shared block under different names
+        (Section~\ref{sec:arch}).
+  \item A modality-keyed thalamic relay including a somatosensory pathway to
+        parietal cortex, which lets a proprioceptive sensor participate in
+        spatial reasoning without passing through vision
+        (Section~\ref{sec:thalamus}).
+  \item \textsc{GridNav}, an embodied navigation benchmark constructed so that
+        no single modality suffices, with an exact shortest-path oracle and a
+        published per-modality ceiling (Section~\ref{sec:gridnav}).
+  \item An ablation protocol that isolates routing, specialisation and
+        modularity separately, under parameter matching and paired seeds
+        (Section~\ref{sec:setup}).
+\end{enumerate}
+
+% ---------------------------------------------------------------------------
+\section{Related Work}
+
+\todo{write this section. It must cover, and honestly position against:}
+\begin{itemize}
+  \item \emph{Mixture-of-experts and conditional computation.} Our routing is
+        fixed and modality-keyed rather than learned per-token; the closest
+        comparison is to hard-routed MoE. State plainly that we do not claim
+        novelty for conditional computation itself.
+  \item \emph{Modular and compositional networks} -- neural module networks,
+        recurrent independent mechanisms, capsule-style routing.
+  \item \emph{Multimodal fusion} -- early/late/intermediate fusion, and where
+        frontal convergence sits among them.
+  \item \emph{Brain-inspired architectures}, including work that uses cortical
+        naming without structural differentiation. This is the gap the paper
+        claims.
+  \item \emph{Catastrophic forgetting and modularity}, as the motivation for
+        why separable modules might help.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Architecture}
+\label{sec:arch}
+
+\subsection{Common representational width}
+
+Every module accepts and emits a vector of fixed width $D$ ($D=256$
+throughout). Fixing $D$ makes modules interchangeable at the wiring level,
+which is what allows an ablation to replace one module with another and change
+nothing else. All derived widths follow from $D$.
+
+Raw inputs reach this common space through per-modality projections. Vision,
+language and audio use frozen pretrained encoders (ResNet-18, MiniLM,
+Whisper-tiny) followed by a trainable linear projection; the backbones are
+never updated, so no result can be attributed to one variant obtaining better
+features. The proprioceptive modality has no pretrained backbone and does not
+want one -- a rangefinder reading is already a measurement -- so its encoder is
+a small trainable MLP. This matters for interpretation: navigation performance
+on that modality is not inherited from a large pretrained model.
+
+\subsection{Modality-keyed thalamic relay}
+\label{sec:thalamus}
+
+Input is not funnelled through a single entry point. Each modality is relayed
+by its own nucleus to a specific cortical target:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Modality & Nucleus & Target \\
+\midrule
+image  & LGN      & occipital \\
+audio  & MGN      & temporal  \\
+text   & pulvinar & temporal  \\
+sensor & VPL      & parietal  \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Each nucleus applies a learned multiplicative gate,
+$\mathrm{relay}(x)\odot\sigma(\mathrm{gate}(x))$, rather than forwarding
+unchanged; thalamic relay cells gain-control what passes rather than acting as
+wires.
+
+Two properties of this table are load-bearing. First, vision reaches parietal
+cortex only \emph{via} occipital, mirroring the dorsal stream; a direct
+LGN--parietal path is rejected by construction. Second, somatosensory input
+does reach parietal directly, which is anatomically correct and is what allows
+an embodied agent's body sense to inform spatial reasoning without being
+rendered into an image first.
+
+The text pathway is a deliberate simplification and we flag it rather than
+bury it: reading in humans enters through vision, and no thalamic nucleus
+relays orthography to temporal cortex. We route text directly because the
+alternative -- rendering text to pixels -- would confound the language pathway
+with the visual one.
+
+\subsection{Functionally distinct cortical modules}
+
+This is the component that distinguishes the work from architectures that use
+cortical vocabulary without cortical structure. The four modules do not share
+an implementation:
+
+\begin{itemize}
+  \item \textbf{Occipital} uses \emph{grouped} connectivity: the representation
+        is partitioned into bands and each hidden unit reads one band, giving
+        local receptive fields, followed by a mixing layer that integrates
+        across bands. A dense layer discards this locality.
+  \item \textbf{Parietal} reads the representation as a set of positions and
+        applies self-attention across them. A spatial relation is a comparison
+        \emph{between} locations, an operation an elementwise MLP cannot
+        express regardless of width.
+  \item \textbf{Temporal} reads the representation as an ordered sequence and
+        applies a gated recurrent unit. Both modalities routed here, language
+        and audio, are sequential; an MLP is order-invariant and discards that.
+  \item \textbf{Frontal} is the sole convergence point. It receives a variable
+        number of $D$-wide streams and fuses them before deciding.
+\end{itemize}
+
+Because these operators differ, ablating a module removes a \emph{capability}
+rather than merely a block of parameters -- which is what makes the ablation in
+Section~\ref{sec:results} interpretable.
+
+\subsection{Convergence and fusion}
+
+Frontal cortex receives from occipital directly \emph{and} via parietal, so on
+the visual pathway it receives two streams simultaneously. With a fixed width
+$D$ this is a shape conflict, resolved by fusing before the module body:
+\[
+n \times D \;\longrightarrow\; \mathrm{fuse} \;\longrightarrow\; D
+   \;\longrightarrow\; \mathrm{module} \;\longrightarrow\; D .
+\]
+Streams occupy \emph{fixed positional slots}. A modality that is absent, or a
+module that is lesioned, contributes zeros to its own slot rather than shifting
+its neighbours. Without fixed slots the fusion weights would mean different
+things depending on which modalities happened to be present, and lesion
+experiments would be uninterpretable. We use concatenation rather than
+summation so that provenance is preserved; summation is available and is
+compared in the ablations.
+
+\subsection{Basal-ganglia gating}
+
+Frontal cortex's decision passes a go/no-go gate before reaching the output.
+A shared striatal representation feeds a direct (Go) and an indirect (NoGo)
+pathway, and the gate is $\sigma(\mathrm{go}-\mathrm{nogo})$, applied
+multiplicatively.
+
+We note one non-obvious implementation constraint, because it silently
+disabled the module in our first version. Initialising both pathway weight
+matrices to zero leaves the gradient reaching the striatum proportional to
+their difference, which stays near zero because the two pathways receive
+exactly opposite gradients; the striatal parameters then never train. Small
+random initialisation breaks the symmetry while biases keep the gate open at
+the start.
+
+% ---------------------------------------------------------------------------
+\section{The GridNav Benchmark}
+\label{sec:gridnav}
+
+Multimodal benchmarks frequently permit a single modality to carry most of the
+signal, in which case fusion is not tested. \textsc{GridNav} is constructed to
+prevent that.
+
+An agent occupies a randomly walled $12\times12$ occupancy grid with one goal.
+Supervision is exact: a breadth-first distance field from the goal defines the
+optimal move, so there is no reward shaping and no exploration variance. Where
+several moves are equally optimal -- which occurs in \todo{X}\% of states --
+all are accepted, and accuracy is measured as whether the chosen action is in
+the optimal set. Scoring against one arbitrarily chosen label would penalise
+correct behaviour.
+
+Each modality is deliberately partial:
+\begin{itemize}
+  \item \textbf{Vision} is an agent-centric $5\times5$ window. The goal falls
+        inside it in only \todo{X}\% of states, so vision reports obstacles but
+        rarely direction.
+  \item \textbf{Proprioception} is eight rangefinder beams giving normalised
+        distance to the nearest wall and a contact flag. It carries no goal
+        information at all.
+  \item \textbf{Language} is a coarse instruction (``the goal lies north-east,
+        far away''). It carries no obstacle information at all.
+\end{itemize}
+
+Direction without obstacles walks into walls; obstacles without direction have
+nowhere to go. We report the single-modality ceilings in
+Table~\ref{tab:sufficiency} as evidence that fusion is required rather than
+asserting it.
+
+The monolithic baseline receives the concatenation of the same three
+observations at the same resolution, so it is disadvantaged in structure only,
+never in information.
+
+% ---------------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Tasks}
+\textsc{GridNav} (above) exercises every module. We add two single-modality
+controls: CIFAR-100 (vision) and 20 Newsgroups (language). We include these
+\emph{expecting no modular advantage} -- with one modality there is nothing to
+route -- because a paper that reported only the setting favourable to its
+hypothesis would not be evidence.
+
+\subsection{Variants}
+Each baseline removes exactly one property:
+\begin{itemize}
+  \item \textbf{--routing}: every modality is broadcast to every module.
+  \item \textbf{--specialisation}: four separate modules, all the plain block.
+  \item \textbf{--modularity}: one module instance reused for every stream.
+  \item \textbf{Monolithic}: a single MLP over the concatenated input.
+\end{itemize}
+Comparing only against the monolithic model would confound three changes at
+once and could not identify which property mattered.
+
+\subsection{Protocol}
+All variants are matched to the modular model's trainable parameter count
+(within \todo{X}\%; achieved counts in Table~\ref{tab:cost}) and share the
+optimiser, schedule, batch size and epoch budget. Frozen encoder features are
+computed once and cached, so every variant consumes identical inputs.
+
+Model selection uses a validation split held out from training; the test split
+is read exactly once per run. Each configuration runs over $n$ seeds, and
+seeds are \emph{paired} across variants -- seed $k$ fixes the same split and
+initialisation draw for every model -- so comparisons use a paired $t$-test and
+report Cohen's $d_z$ alongside $p$.
+
+\subsection{Failure modes}
+We measure two distinct failures. \emph{Module lesion} disables a cortical
+module, which is the biological analogue. \emph{Sensor failure} removes an
+input modality, which is the engineering case for an embodied agent whose
+camera is occluded or whose rangefinder fails. These are different experiments
+and we keep them separate.
+
+% ---------------------------------------------------------------------------
+%% IMPORTANT: the tables below are generated. Do not type numbers into this
+%% section. Write the interpreting sentences ONLY after reading results.json,
+%% and if the modular model loses on a task, say so -- the ablations are
+%% informative either way, and a negative multimodal result is publishable.
+% ---------------------------------------------------------------------------
+\section{Results}
+\label{sec:results}
+
+\input{generated/table_main}
+
+\todo{Interpret Table~\ref{tab:main}. Expect no modular advantage on the
+single-modality controls; state that plainly.}
+
+\input{generated/table_significance}
+
+\todo{Interpret Table~\ref{tab:significance}. Which single removed property
+costs the most? That is the paper's actual finding.}
+
+\subsection{Damage tolerance}
+
+\input{generated/table_damage}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{generated/damage.pdf}
+  \caption{Accuracy retained on \textsc{GridNav} under module lesion and
+           sensor failure.}
+  \label{fig:damage}
+\end{figure}
+
+\todo{Interpret. The claim to test is graceful rather than catastrophic
+degradation relative to the monolithic model.}
+
+\subsection{Inference cost}
+
+\input{generated/table_cost}
+
+\todo{Interpret. Routing should skip modules no modality addresses; report the
+saving, or report that there is none.}
+
+% ---------------------------------------------------------------------------
+\section{Discussion}
+
+\todo{Written after results.}
+
+\subsection{Limitations}
+
+We state these regardless of outcome.
+
+\begin{itemize}
+  \item \textbf{Scale.} Modules are on the order of $10^6$ parameters and tasks
+        are small enough to train on CPU. Whether the effect survives at scale
+        is untested.
+  \item \textbf{Routing is fixed, not learned.} The modality--module map is
+        specified by anatomy, not discovered. A learned router is the obvious
+        comparison and is not run here.
+  \item \textbf{\textsc{GridNav} is synthetic.} The oracle is exact and the
+        environment is fully observable to the generator, which is what makes
+        supervision clean but also what makes it easier than a real robot's
+        world.
+  \item \textbf{Borrowed perception.} Three of four modalities depend on frozen
+        pretrained encoders. The architecture is evaluated on what it does with
+        features, not on learning them.
+  \item \textbf{No temporal credit assignment.} \textsc{GridNav} is single-step
+        imitation of a shortest-path oracle, not sequential control. Nothing
+        here demonstrates closed-loop navigation.
+  \item \textbf{Audio is unexercised.} The pathway exists and is verified, but
+        no task in this evaluation routes audio.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\section{Conclusion}
+
+\todo{Written after results.}
+
+% ---------------------------------------------------------------------------
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}
