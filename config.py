@@ -134,6 +134,62 @@ FRONTAL_FUSION_IN_DIM = MAX_STREAMS * LATENT_DIM
 FRONTAL_FUSION_MODE = "concat"
 
 # ---------------------------------------------------------------------------
+# v2 -- THE SETTLING LOOP (BUILD_SPEC_V2 section 2)
+#
+# Cortex is not a pipeline. Every area is active on every timestep, exchanging
+# signals across conduction delays, settling over what would be ~100-300 ms.
+#
+# T_STEPS is how many exchange rounds one percept gets. Every cross-module read
+# is from state[t - delay], never state[t] -- that is what makes the four lobes
+# genuinely parallel rather than a pipeline in disguise, and the delay IS the
+# conduction latency rather than a workaround for it.
+# ---------------------------------------------------------------------------
+
+T_STEPS = 8
+
+# Conduction delay per tract, in timesteps. Longer tract, longer delay -- a
+# principled reason for different t-k offsets rather than an arbitrary one.
+# Every cortical tract is at least 1: a lobe may never read another lobe's
+# CURRENT state, or the "parallel" claim is false.
+TRACT_DELAYS: dict[str, int] = {
+    "optic_radiation": 1,   # LGN -> occipital, short
+    "acoustic_radiation": 1,  # MGN -> temporal
+    "somato_radiation": 1,  # VPL -> parietal
+    "ilf": 1,               # occipital <-> temporal, ventral "what"
+    "slf": 1,               # parietal <-> frontal, dorsal "where/how"
+    "ifof": 2,              # occipital <-> frontal, long association fibre
+    "arcuate": 2,           # temporal <-> frontal, long
+    "recurrent": 1,         # frontal -> frontal, working memory
+}
+
+# MEMBRANE TIME CONSTANT. A cortical population does not instantaneously adopt
+# whatever its inputs imply; it integrates toward it. Discretised rate model:
+#
+#     state[t] = (1 - alpha) * state[t-1] + alpha * f(drive)
+#
+# Without this term the loop has no contraction: each timestep recomputes the
+# state from scratch, so it wanders instead of converging. Measured on the
+# first build with no leak, state change per step went 98 -> 120 -> 104 across
+# T -- moving MORE at the end than the start, which fails the stage-1 gate.
+# Alpha is the fraction of the new drive admitted per step; lower is slower and
+# smoother. 1.0 reproduces the non-settling behaviour exactly.
+CORTICAL_LEAK = 0.45
+
+# A settled state should stop moving. Measured as ||state[t] - state[t-1]||.
+#
+# The gate the spec actually names is "state change per timestep DECREASES
+# across T" -- monotonicity, which is a property rather than a magic number.
+# The ratio below is a secondary sanity bound, and it is set from measurement
+# rather than taste: at T=8 the convergence ratio plateaus near 0.38 for any
+# leak that settles at all (0.48 at leak 0.2, 0.38 at 0.45 and 0.6), so a
+# halving is comfortably achievable and an earlier guess of 0.35 was
+# unreachable by construction. Both conditions must hold.
+SETTLING_TOLERANCE = 0.5    # final delta <= half the first
+
+# Measured: leak >= 0.8 does not settle monotonically, leak <= 0.6 always does.
+# 0.45 sits mid-range with margin on both sides.
+
+# ---------------------------------------------------------------------------
 # Basal ganglia gate (PROJECT.md section 2.1)
 # ---------------------------------------------------------------------------
 
