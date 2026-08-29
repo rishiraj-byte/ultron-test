@@ -173,7 +173,14 @@ def gate4_gradients(cortex: Cortex) -> None:
 
     cortex.train()
     cortex.zero_grad(set_to_none=True)
-    trace = cortex.settle(sensory_batch())
+    # Exercise the FULL system, sequences included. Running without them left
+    # parietal's spatial attention and temporal's sequence GRU untouched and
+    # reported 72.7% -- a gap in the test, not the model.
+    D = config.LATENT_DIM
+    sequences = {"occipital": torch.randn(4, 49, D),
+                 "parietal": torch.randn(4, 49, D),
+                 "temporal": torch.randn(4, 12, D)}
+    trace = cortex.settle(sensory_batch(), sequences=sequences)
     loss = sum(v.pow(2).mean() for v in trace.final.values())
     loss.backward()
 
@@ -188,11 +195,29 @@ def gate4_gradients(cortex: Cortex) -> None:
         else:
             missing.append(name)
 
+    # Nuclei the spec declares but no stage has wired up yet. Listed
+    # explicitly, never pattern-matched away: an unexpected gap must fail
+    # here, and "expected" has to mean a stage number someone wrote down.
+    not_yet_driven = {
+        "thalamus.nuclei.MD": "stage 5 -- BG return path",
+        "thalamus.nuclei.VA_VL": "stage 5 -- BG + cerebellar return",
+    }
+    unexpected = [n for n in missing
+                  if not any(n.startswith(k) for k in not_yet_driven)]
+
     pct = 100 * trained / max(total, 1)
-    check("100% of trainable parameters received gradient", not missing,
+    check("no UNEXPECTED parameter is without gradient", not unexpected,
           f"{trained:,} / {total:,}  ({pct:.1f}%)")
-    for name in missing[:10]:
+    for name in unexpected[:10]:
         print(f"         no gradient: {name}")
+
+    if missing and not unexpected:
+        print()
+        print("         declared-but-undriven, awaiting their stage:")
+        for prefix, why in not_yet_driven.items():
+            n = sum(1 for m in missing if m.startswith(prefix))
+            if n:
+                print(f"           {prefix:<28} {n} tensors   ({why})")
 
     print(f"\n{'module':<16}{'params':>12}{'grad L2':>14}")
     print("-" * 44)
@@ -319,12 +344,66 @@ def gate6_unpooled(cortex: Cortex) -> None:
           f"ratio {trace.settling_ratio():.3f}")
 
 
+
+
+def gate7_feedback(cortex: Cortex) -> None:
+    """STAGE 3 -- corticothalamic feedback and the TRN."""
+    rule("GATE 7  FEEDBACK, CORTICOTHALAMIC LOOP, TRN (stage 3)")
+    print("v1's thalamus ran once, before cortex, and could not be influenced")
+    print("by what cortex made of the input. Now it sits INSIDE the loop,")
+    print("re-gated every timestep by frontal feedback and TRN inhibition.")
+    print("The gate: ablating feedback must change the output measurably.")
+    print()
+
+    sensory = sensory_batch()
+    cortex.eval()
+    with torch.no_grad():
+        intact = cortex.settle(sensory)
+        no_feedback = cortex.settle(sensory, use_feedback=False)
+        no_trn = cortex.settle(sensory, use_trn=False)
+        no_thalamus = cortex.settle(sensory, use_thalamus=False)
+
+    baseline = sum(float(v.norm()) for v in intact.final.values())
+
+    def moved(other) -> float:
+        gap = sum(float((intact.final[l] - other.final[l]).norm())
+                  for l in cortex.LOBES)
+        return gap / baseline if baseline else 0.0
+
+    fb, trn, thal = moved(no_feedback), moved(no_trn), moved(no_thalamus)
+    print("    cortical feedback severed      output moves %7.1f%%" % (100 * fb))
+    print("    TRN inhibition disabled        output moves %7.1f%%" % (100 * trn))
+    print("    thalamic gating bypassed       output moves %7.1f%%" % (100 * thal))
+    print()
+    check("feedback ablation changes the output", fb > 0.01, "%.1f%%" % (100 * fb))
+    check("TRN ablation changes the output", trn > 0.01, "%.1f%%" % (100 * trn))
+    check("thalamic gating changes the output", thal > 0.01, "%.1f%%" % (100 * thal))
+
+    print()
+    print("-- the TRN must be SELECTIVE, not a global volume knob --")
+    print("   (attending to one channel should suppress its rivals)")
+    for nucleus in ("LGN", "MGN", "VPL", "PULVINAR"):
+        series = [g[nucleus] for g in intact.gates]
+        print("    %-10s gate %s" % (nucleus, " ".join("%.3f" % v for v in series)))
+
+    first, last = intact.gates[0], intact.gates[-1]
+    shift = {n: last[n] - first[n] for n in first}
+    rose = [n for n, d in shift.items() if d > 0.005]
+    fell = [n for n, d in shift.items() if d < -0.005]
+    check("some nuclei boosted, others suppressed", bool(rose) and bool(fell),
+          "up %s, down %s" % (rose, fell))
+
+    print()
+    print("-- and it still settles with the thalamus in the loop --")
+    check("settles", intact.settled(), "ratio %.3f" % intact.settling_ratio())
+
+
 # ---------------------------------------------------------------------------
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gate", type=int, choices=(1, 2, 3, 4, 5, 6))
+    parser.add_argument("--gate", type=int, choices=(1, 2, 3, 4, 5, 6, 7))
     args = parser.parse_args()
 
     print("=" * 78)
@@ -341,7 +420,8 @@ def main() -> int:
           f"({', '.join(f'{k} {v:,}' for k, v in counts.items())})")
 
     gates = {1: gate1_shapes, 2: gate2_parallelism, 3: gate3_settling,
-             4: gate4_gradients, 5: gate5_ablation, 6: gate6_unpooled}
+             4: gate4_gradients, 5: gate5_ablation, 6: gate6_unpooled,
+             7: gate7_feedback}
     for number in ([args.gate] if args.gate else sorted(gates)):
         gates[number](cortex)
 

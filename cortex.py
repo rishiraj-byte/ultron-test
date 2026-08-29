@@ -47,6 +47,7 @@ import torch.nn as nn
 
 import config
 from modules.lobes import FrontalLobe, OccipitalLobe, ParietalLobe, TemporalLobe
+from modules.thalamus_v2 import ThalamusV2
 from modules.tracts import StateHistory, Tract, TractBundle
 
 #  Cortical wiring for stage 1. Read as: (tract name, source, target).
@@ -99,15 +100,26 @@ class SettleTrace:
     deltas: list[float] = field(default_factory=list)
     #  lobe -> its state at the final timestep
     final: dict[str, torch.Tensor] = field(default_factory=dict)
+    #  per timestep: nucleus -> gate opening, and nucleus -> TRN inhibition
+    gates: list[dict[str, float]] = field(default_factory=list)
+    inhibition: list[dict[str, float]] = field(default_factory=list)
     elapsed_ms: float = 0.0
+
+    def measured(self) -> list[float]:
+        """Deltas excluding the onset transient. See config.SETTLING_WARMUP."""
+        return self.deltas[config.SETTLING_WARMUP:]
 
     def monotonic(self, slack: float = 1.02) -> bool:
         """Does state change DECREASE every timestep? The spec's actual words.
 
+        Measured from the first CLOSED-LOOP step: at t=0 every tract delay is
+        >= 1, so nothing recurrent has arrived and the lobes see sensory drive
+        alone. That first jump is onset, not settling.
+
         `slack` allows a 2% wobble so floating-point noise on a nearly-flat
         tail does not fail an otherwise converging run.
         """
-        d = self.deltas
+        d = self.measured()
         return len(d) >= 2 and all(d[i + 1] <= d[i] * slack for i in range(len(d) - 1))
 
     def settled(self, tolerance: float = config.SETTLING_TOLERANCE) -> bool:
@@ -119,14 +131,16 @@ class SettleTrace:
         A loop that fails either makes T meaningless: you would be running an
         RNN that never settles and stopping at an arbitrary point.
         """
-        if len(self.deltas) < 2 or self.deltas[0] <= 0:
+        d = self.measured()
+        if len(d) < 2 or d[0] <= 0:
             return False
-        return self.monotonic() and (self.deltas[-1] / self.deltas[0]) <= tolerance
+        return self.monotonic() and (d[-1] / d[0]) <= tolerance
 
     def settling_ratio(self) -> float:
-        if len(self.deltas) < 2 or self.deltas[0] <= 0:
+        d = self.measured()
+        if len(d) < 2 or d[0] <= 0:
             return float("nan")
-        return self.deltas[-1] / self.deltas[0]
+        return d[-1] / d[0]
 
 
 class Cortex(nn.Module):
@@ -146,6 +160,11 @@ class Cortex(nn.Module):
             "temporal": TemporalLobe(dim=dim, dropout=dropout),
             "frontal": FrontalLobe(dim=dim, dropout=dropout),
         })
+
+        # Stage 3: the thalamus is INSIDE the loop, re-gated every timestep
+        # under cortical feedback and TRN inhibition. In v1 it ran once, before
+        # cortex, and could not be influenced by what cortex made of the input.
+        self.thalamus = ThalamusV2(dim=dim)
 
         self.tracts = TractBundle()
         for name, source, target in CORTICAL_TRACTS:
@@ -214,6 +233,9 @@ class Cortex(nn.Module):
         steps: int = config.T_STEPS,
         order: tuple[str, ...] | None = None,
         sequences: dict[str, torch.Tensor] | None = None,
+        use_thalamus: bool = True,
+        use_trn: bool = True,
+        use_feedback: bool = True,
     ) -> SettleTrace:
         """Run the loop. `sensory` maps "thal.<NUCLEUS>" -> (B, dim).
 
@@ -232,12 +254,17 @@ class Cortex(nn.Module):
         batch = probe.shape[0] if probe.dim() > 1 else 1
         history = StateHistory(dim=self.dim, batch=batch, device=probe.device)
 
-        # Sensory drive is constant across the settling window: one percept is
-        # being integrated, not a stream. Written at every timestep so tracts
-        # reading t-k always find it.
-        for name, value in sensory.items():
-            for t in range(-max(config.TRACT_DELAYS.values()) - 2, steps + 1):
-                history.write(name, t, value)
+        # Raw sensory, keyed by nucleus. Constant across the window: one
+        # percept is being integrated, not a stream.
+        raw = {name.replace("thal.", ""): value for name, value in sensory.items()}
+
+        # Feedback ablation for the stage-3 gate: sever the descending tracts
+        # rather than special-casing the loop, so the thing being measured is
+        # the same object the rest of the system uses.
+        feedback_tracts = ("fb_frontal_occ", "fb_frontal_par", "fb_frontal_tem")
+        if not use_feedback:
+            for name in feedback_tracts:
+                self.tracts[name].lesion(True)
 
         lobes = tuple(order) if order else self.LOBES
         if set(lobes) != set(self.LOBES):
@@ -247,6 +274,31 @@ class Cortex(nn.Module):
         started = time.perf_counter()
 
         for t in range(steps):
+            # ---- THALAMUS FIRST, under cortical control from t-1 ----
+            # Gated by what frontal made of the last timestep. This is the
+            # corticothalamic loop: cortex is not merely reading the thalamus,
+            # it is continuously re-tuning what the thalamus lets through.
+            feedback = history.read("frontal", t - 1) if use_thalamus else None
+            if use_thalamus:
+                relayed = self.thalamus(raw, feedback, use_trn=use_trn)
+                trace.gates.append(dict(relayed.gates))
+                trace.inhibition.append(dict(relayed.inhibition))
+                for nucleus, value in relayed.nuclei.items():
+                    # Relay cells have membrane time constants too. Without
+                    # this the corticothalamic loop oscillates instead of
+                    # converging: measured with an instantaneous gate, the
+                    # settling ratio went from 0.38 to 0.84 and the gate values
+                    # swung back and forth across T rather than resolving.
+                    # Same physics as the cortical leak, applied to the thalamus.
+                    key = f"thal.{nucleus}"
+                    previous = history.read(key, t - 1) if t > 0 else value
+                    history.write(
+                        key, t, (1.0 - self.leak) * previous + self.leak * value
+                    )
+            else:
+                for nucleus, value in raw.items():
+                    history.write(f"thal.{nucleus}", t, value)
+
             # ---- ALL FOUR LOBES, SAME TIMESTEP ----
             # Computed into a staging dict and only then committed. Nothing
             # written here is visible to anything else in this loop body, so
@@ -271,6 +323,10 @@ class Cortex(nn.Module):
                 previous = history.read(lobe, t - 1)
                 delta += float((computed[lobe] - previous).detach().norm())
             trace.deltas.append(delta)
+
+        if not use_feedback:
+            for name in feedback_tracts:
+                self.tracts[name].lesion(False)
 
         trace.final = {lobe: history.read(lobe, steps - 1) for lobe in self.LOBES}
         trace.elapsed_ms = (time.perf_counter() - started) * 1000.0

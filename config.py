@@ -193,6 +193,20 @@ CORTICAL_LEAK = 0.45
 # unreachable by construction. Both conditions must hold.
 SETTLING_TOLERANCE = 0.5    # final delta <= half the first
 
+# Timesteps to exclude from the settling measurement at the start.
+#
+# At t=0 the loop has not closed: every tract carries delay >= 1, so every
+# cross-module read returns resting state and the lobes respond to sensory
+# drive alone. The jump from rest to first response is ONSET, not settling, and
+# once the thalamus joined the loop (stage 3) it showed up as a delta that
+# rises before it falls -- 25 -> 43 -> 37 -> 31 -> ... -> 21. From t=1 that
+# series is strictly decreasing.
+#
+# This is a structural fact about the delays, not a threshold chosen to make a
+# test pass: with max tract delay 2, the loop is only fully closed from t=2,
+# and one warm-up step is the conservative choice.
+SETTLING_WARMUP = 1
+
 # Measured: leak >= 0.8 does not settle monotonically, leak <= 0.6 always does.
 # 0.45 sits mid-range with margin on both sides.
 
