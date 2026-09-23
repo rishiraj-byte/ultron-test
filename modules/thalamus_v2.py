@@ -117,7 +117,8 @@ class RelayNucleusV2(nn.Module):
         if trn_inhibition is not None:
             drive = drive - trn_inhibition
         opening = torch.sigmoid(drive)
-        self._last_gate = float(opening.mean().detach())
+        if config.COLLECT_TELEMETRY:
+            self._last_gate = float(opening.mean().detach())
         return self.norm(self.relay(sensory) * opening)
 
     @property
@@ -149,15 +150,31 @@ class ThalamusV2(nn.Module):
     def forward(
         self,
         sensory: dict[str, torch.Tensor],
-        cortical_feedback: torch.Tensor | None = None,
+        cortical_feedback: torch.Tensor | dict[str, torch.Tensor] | None = None,
         use_trn: bool = True,
+        trn_drive: torch.Tensor | None = None,
     ) -> ThalamicOutput:
-        """`sensory` maps nucleus name -> (B, dim). Missing nuclei stay silent."""
+        """`sensory` maps nucleus name -> (B, dim). Missing nuclei stay silent.
+
+        `cortical_feedback` may be one tensor shared by every nucleus, or a
+        dict nucleus -> feedback. The dict form is the real anatomy: LGN is
+        addressed by visual cortex, MGN by auditory cortex, and so on. Every
+        cortical area has an L6 corticothalamic projection, not just the one
+        at the top -- a single shared tensor quietly makes three of those
+        four projections nonexistent.
+
+        `trn_drive` is separate because the TRN is an ATTENTIONAL controller:
+        it is told what to suppress by frontal cortex, and its whole function
+        is to arbitrate BETWEEN nuclei, which a per-nucleus signal cannot do.
+        """
         out = ThalamicOutput()
 
+        if trn_drive is None and isinstance(cortical_feedback, torch.Tensor):
+            trn_drive = cortical_feedback
+
         inhibition = {}
-        if use_trn and cortical_feedback is not None:
-            inhibition = self.trn(cortical_feedback)
+        if use_trn and trn_drive is not None:
+            inhibition = self.trn(trn_drive)
 
         for name, signal in sensory.items():
             if name not in self.nuclei:
@@ -166,13 +183,18 @@ class ThalamusV2(nn.Module):
                 )
             nucleus = self.nuclei[name]
             trn_term = inhibition.get(name)
-            relayed = nucleus(signal, cortical_feedback, trn_term)
+            if isinstance(cortical_feedback, dict):
+                own_feedback = cortical_feedback.get(name)
+            else:
+                own_feedback = cortical_feedback
+            relayed = nucleus(signal, own_feedback, trn_term)
 
             out.nuclei[name] = relayed
             out.raw[name] = signal
             out.gates[name] = nucleus.last_gate
             out.inhibition[name] = (
-                float(trn_term.mean().detach()) if trn_term is not None else 0.0
+                float(trn_term.mean().detach())
+                if trn_term is not None and config.COLLECT_TELEMETRY else 0.0
             )
         return out
 

@@ -201,6 +201,21 @@ photographs are what make it mean something.
 
 ---
 
+## After an architecture change, retrain BOTH builds
+
+v1 and v2 keep separate checkpoints and share `modules/lobes.py`, so a change
+to a lobe invalidates both. Neither will load stale weights silently:
+
+* v1 refuses outright -- `architecture_signature()` hashes the tensor names and
+  shapes, and a mismatch raises rather than loading.
+* v2 loads what still matches, prints which parameters the checkpoint predates,
+  and reports itself UNTRAINED until it has been retrained.
+
+```
+python train.py        # v1, minutes
+python train_v2.py     # v2, hours on a laptop GPU
+```
+
 ## Honest limits
 
 - **Text output only.** Image, audio and video *output* are deferred (§7.1).
@@ -208,10 +223,17 @@ photographs are what make it mean something.
   no model) but not *what it says* — no OCR engine is installed. The string it
   hands to temporal is worded as a layout description so nothing downstream can
   mistake it for a transcript.
-- **Video has no audio track.** OpenCV decodes video only. Extract it with
-  `ffmpeg -i clip.mp4 -ac 1 -ar 16000 track.wav` and load that separately.
-- **Non-WAV audio needs conversion.** `.wav` is read with the stdlib; anything
-  else needs `soundfile`/`librosa`/`torchaudio`, none of which are installed.
+- **Audio and video decoding depend on what is installed.** The v2 app reports
+  what it found at startup on the input pane (`AUD:` and `VID:` lines) rather
+  than failing on the file you picked. With `soundfile` and `imageio-ffmpeg`
+  present it reads essentially any audio format and pulls the soundtrack out of
+  a video; with only `scipy` it is limited to uncompressed WAV, which is what
+  the line says. Install both with
+  `pip install soundfile imageio-ffmpeg opencv-python`.
+- **A clip is eight frames, not a film.** Video is sampled to
+  `config.VIDEO_FRAMES` evenly spaced frames. The frames are read in order, so
+  motion is visible to the recurrent lobe, but nothing here models duration or
+  tracks an object between frames.
 - **A distilled student cannot beat its teacher.** Training makes the lobes'
   answer meaningful, not better than ResNet-18.
 

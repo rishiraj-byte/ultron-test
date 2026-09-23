@@ -1,0 +1,36 @@
+{
+  "gates": {
+    "settling_ratio": "0.146",
+    "permutation_gap": "0.00e+00",
+    "gradient_coverage": "100.0",
+    "sparsity_achieved": "5.1",
+    "dg_sparsity": "1.95",
+    "ach_low": "79.4",
+    "ach_high": "98.4",
+    "replay_gain": "14.5",
+    "ca3_before": "0.6407",
+    "ca3_after": "0.9448",
+    "weakest_ablation": "34.0",
+    "gates_passed": 113,
+    "gates_failed": 0
+  },
+  "checkpoint": {
+    "epochs": 25,
+    "examples": 867200,
+    "minutes": 119.5,
+    "classes": {
+      "image": 100,
+      "text": 20,
+      "audio": 6,
+      "sensor": 4
+    }
+  },
+  "architecture": {
+    "trainable": 9365549,
+    "frozen": 75940116,
+    "tracts": 26,
+    "timesteps": 12,
+    "latent": 256,
+    "sparsity": 0.05
+  }
+}

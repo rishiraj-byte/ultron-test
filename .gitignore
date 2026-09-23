@@ -19,3 +19,9 @@ assets/*.png
 __pycache__/
 *.pyc
 .venv/
+
+# Run output. Reproducible by re-running the command that made it.
+*.log
+
+# Throwaway pipeline wrappers from interactive sessions.
+v3_*.sh

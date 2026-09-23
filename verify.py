@@ -413,8 +413,29 @@ def verify_layers(brain: BrainAI, last: BrainTrace) -> None:
 
     print("\n-- widths must match the live modules, not a hardcoded list --")
     check("lobe input width", brain.topology["occipital"][0].size, D)
-    check("lobe hidden width", brain.topology["occipital"][3].size,
-          config.LOBE_HIDDEN_DIM)
+    #  With a pretrained core the lobe has no hidden layer of its own: its
+    #  operator IS a frozen network, and the width that matters is that
+    #  network's, read off the live module rather than a constant. Asserting
+    #  LOBE_HIDDEN_DIM here would be checking a config value against itself.
+    occipital = brain.cortex["occipital"]
+    core = getattr(occipital, "core", None)
+    if core is None:
+        check("lobe hidden width", brain.topology["occipital"][3].size,
+              config.LOBE_HIDDEN_DIM)
+    else:
+        #  Read from the live core, not hardcoded. Naming the expected model
+        #  here means this check has to be edited every time the core changes
+        #  -- and it failed for exactly that reason when occipital moved from
+        #  ResNet-18 to ResNet-50, reporting a successful upgrade as a defect.
+        #  What matters is that a pretrained convolution IS there and its
+        #  width comes from the model rather than from a constant.
+        check("occipital operator is a pretrained convolution",
+              "ResNet" in core.teacher_name and "layer4" in core.teacher_name,
+              True)
+        check("its width is the teacher's, not a constant",
+              core.teacher_dim > config.LATENT_DIM, True)
+        check("its weights are frozen",
+              all(not p.requires_grad for p in core.teacher.parameters()), True)
     check("lobe output width", brain.topology["occipital"][-1].size, D)
     check("frontal input is the stream block",
           brain.topology["frontal"][0].size, config.FRONTAL_FUSION_IN_DIM)

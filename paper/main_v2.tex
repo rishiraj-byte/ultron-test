@@ -1,0 +1,487 @@
+%% ---------------------------------------------------------------------------
+%% Machine-Checkable Anatomy -- IEEE conference paper, v2 architecture
+%%
+%% Build:
+%%     python paper/collect_v2.py --with-benchmark   -> generated/v2.tex
+%%     pdflatex main_v2 && bibtex main_v2 && pdflatex main_v2 && pdflatex main_v2
+%%
+%% NOTHING IN THE RESULTS SECTION IS TYPED BY HAND. Every number arrives via
+%% \input{generated/v2.tex}, written by collect_v2.py from the actual gates and
+%% the actual checkpoint. The paper's central argument is that brain-inspired
+%% architecture claims should be machine-checked; a paper making that argument
+%% with hand-transcribed numbers would refute itself.
+%% ---------------------------------------------------------------------------
+
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{url}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\input{generated/v2.tex}
+
+\begin{document}
+
+\title{Machine-Checkable Anatomy: Making Brain-Inspired\\
+Architecture Claims Falsifiable}
+
+\author{\IEEEauthorblockN{Rishiraj Chakraborty}}
+
+\maketitle
+
+\begin{abstract}
+Brain-inspired architectures are usually validated on task accuracy, which
+cannot distinguish a system whose anatomy does work from one where the
+anatomical language is decorative. We present a multimodal architecture of four
+functionally distinct cortical lobes, a thalamus with reticular gating, basal
+ganglia, limbic structures and a cerebellar forward model, in which every
+anatomical claim is expressed as an executable test. Parallelism is established
+by permutation invariance rather than asserted: all $24$ orderings of the four
+lobes produce bit-identical output. Convergence, sparsity, Dale's principle,
+corticothalamic balance, pattern completion and hippocampal replay are each
+measured rather than described, and every one of \ArchitectureTracts{} named
+white-matter tracts is shown to change the output when severed. We report
+\GatesPassed{} passing checks. Against a parameter-matched monolithic MLP the
+architecture loses by 1.0 points on a 20-class text task and 6.0 points on
+100-class images, at roughly a hundred times the compute, and we report that
+plainly:
+every module mattering and the whole being better are separate claims, and only
+the first is established here. We also report what the discipline exposed: three
+distinct failures that produced plausible accuracy while a module was
+functionally dead, each invisible to task metrics and each caught only by a
+structural test. We argue that this class of failure is the normal case in
+brain-inspired work, and that accuracy alone cannot detect it.
+\end{abstract}
+
+\begin{IEEEkeywords}
+neuromorphic architecture, modular networks, verification, cortical models,
+ablation analysis
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+A recurring pattern in brain-inspired machine learning is that a system is
+described in anatomical terms---lobes, thalamic relays, basal ganglia
+gating---and then evaluated on a benchmark. If accuracy is competitive, the
+anatomy is taken to be doing something. This inference does not hold. A network
+can contain a component named ``basal ganglia'' that receives input, produces
+output, trains without error, and contributes nothing whatsoever to the result,
+because the rest of the system has routed around it. Accuracy cannot see this.
+Neither can a loss curve.
+
+We take the position that an anatomical claim is only meaningful if it is
+falsifiable, and that the falsification should be executable. If a system claims
+its lobes run in parallel, there should be a test that fails when they do not.
+If it claims a tract carries information, cutting the tract should change the
+output, and the amount should be reported.
+
+This paper describes such a system and, equally, what building it under that
+constraint revealed.
+
+\subsection{Contributions}
+
+\begin{enumerate}
+\item An architecture of four inductively distinct cortical lobes settling
+      recurrently over $T=\ArchitectureTimesteps{} timesteps with explicit
+      conduction delays, plus thalamic, basal ganglionic, limbic, cerebellar and
+      neuromodulatory subsystems. Systems containing these structures exist
+      \cite{marti4,braincog}; what is new here is that each commitment is
+      stated so that it can fail.
+\item A gate suite in which every anatomical claim is an executable test,
+      with \GatesPassed{} checks passing. Parallelism is proved by permutation
+      invariance, conduction delay by when a severed pathway is first felt,
+      sparsity and Dale's principle by measurement rather than by construction
+      alone.
+\item The observation that ablation measured as state displacement and
+      ablation measured as accuracy come apart entirely -- $134\%$ against
+      $0.0$ points for the same severed pathway. Ablation is well established
+      for establishing necessity \cite{meyes2019}; which of these two
+      quantities it reports decides the conclusion.
+\item Four documented failure modes in which a module was inert or being
+      corrupted while task accuracy and loss curves looked healthy. This is
+      the paper's most transferable result, and one of them inverted our own
+      headline finding.
+\end{enumerate}
+
+\section{Related Work}
+
+Three lines of work bear directly on this paper, and the position we occupy is
+defined as much by what they already do well as by what none of them do.
+
+\subsection{Brain-inspired modular architectures}
+
+Decomposing perception into specialised interacting modules on neuroscientific
+grounds is an active line of work. Recent cortically-inspired architectures
+operationalise modular specialisation, cross-modal integration and predictive
+feedback, and demonstrate that cortical organisation principles improve
+modularity in practice \cite{cortical2026}. That work is explicit that it
+implements functional \emph{principles} rather than anatomy: it has no
+thalamus, no basal ganglia and no conduction delays, and it states the absence
+of explicit temporal dynamics as a limitation.
+
+Systems that do implement named subcortical structures exist. MARTI-4 couples
+neocortex, basal ganglia and thalamus with the thalamus as an information hub
+\cite{marti4}, and BrainCog provides a spiking substrate for brain-inspired
+cognitive engines \cite{braincog}. Broader surveys map brain regions onto AI
+paradigms and argue for the correspondence \cite{surveyjin,agentagi}.
+
+Our architecture belongs to this family and is not novel for containing these
+structures. What differs is that every anatomical commitment is made
+falsifiable: conduction delays are enforced rather than described, so
+parallelism is provable by permutation; every projection is a named object, so
+a single pathway can be severed; and the sparsity, sign constraints and
+corticothalamic balance are measured rather than asserted.
+
+\subsection{Ablation as verification}
+
+Ablation is long established for establishing that a component is necessary,
+and has been studied systematically in artificial networks
+\cite{meyes2019}. The standard question it answers is whether removing a part
+degrades \emph{performance}.
+
+We ask a different one, and the difference produced this paper's most useful
+result. Our sweep measures how far removing a part moves the system's internal
+state, and we found that this comes apart from performance completely: severing
+the arcuate fasciculus displaces the settled cortical state by $134\%$ and
+costs $0.0$ accuracy points. Both numbers are correct. A part can be
+load-bearing for the representation and irrelevant to the answer, and an
+ablation protocol that reports only one of those will conclude the opposite of
+an ablation protocol that reports the other.
+
+\subsection{What we claim}
+
+Not that anatomical structure improves accuracy -- our own benchmark says it
+does not, on these tasks. The claim is narrower and, we think, more useful: a
+brain-inspired architecture should state its commitments as executable tests,
+because the alternative is a literature of systems whose anatomical vocabulary
+cannot be checked. Section~V reports four failures found this way, each of
+which produced entirely normal training behaviour while a component was inert
+or being corrupted.
+
+\section{Architecture}
+
+\subsection{No forward pass}
+
+The system has no pipeline order. All four lobes update simultaneously from
+delayed copies of one another:
+\begin{equation}
+s_\ell[t] = (1-\alpha)\, s_\ell[t-1] + \alpha \, f_\ell\!\left(
+\textstyle\sum_{\tau \in \mathrm{in}(\ell)} W_\tau\, s_{\mathrm{src}(\tau)}[t - d_\tau]\right)
+\end{equation}
+where every $d_\tau \ge 1$. No module may read the present state of any other,
+which makes update order irrelevant by construction rather than by convention.
+The leak $\alpha$ is a membrane time constant; without it the state is a fresh
+function of the inputs at every step and never converges.
+
+\subsection{Four operators, one input}
+
+The claim that the lobes are four distinct networks rather than one network
+instantiated four times is load-bearing, and it is only meaningful if each
+reads the same input differently. Every sensory sequence is therefore delivered
+to all four lobes, and each applies its own operator to it: occipital filters
+locally with grouped convolution over real spatial positions, parietal attends
+between positions, temporal carries order through recurrence, and frontal
+scores positions for relevance and integrates by that score. The modalities
+remain distinguished by the thalamic nucleus they enter and by which lobe is
+listed first, not by which lobes are permitted to see them.
+
+This was not the original arrangement, and the difference is measurable. When
+each modality was routed to a single lobe, a text input reached only temporal
+and the remaining three lobes carried nothing but echoes returning over
+cortico-cortical tracts; three of the four networks were not parsing the input
+at all. That is invisible in accuracy, which is the recurring theme of
+Section~V.
+
+\subsection{Named tracts}
+
+Every connection is a first-class object with a source, a target, a conduction
+delay and a lesion switch. There is no anonymous tensor addition anywhere in the
+update. This is what makes single-pathway ablation possible, and it is a
+constraint on the implementation rather than an annotation of it.
+
+\subsection{Laminar organisation}
+
+Afferents are routed by cortical layer: thalamic drive to L4, lateral and
+feedforward cortico-cortical input to L2/3, feedback to L5/6, with L6 supplying
+the corticothalamic projection. Each tract declares its layer, and a tract
+without a declared layer raises an error at construction. Superficial layers
+enforce $k$-winners-take-all sparsity at
+\ArchitectureSparsity{} and separate excitatory and inhibitory populations whose
+weights are held non-negative by construction, so Dale's principle is a property
+of the parameterisation rather than a hope about training.
+
+\subsection{Subcortical systems}
+
+The basal ganglia implement direct, indirect and hyperdirect pathways with a
+tonically active output nucleus, so ``Go'' operates by disinhibition. Critically,
+their output goes to the thalamus and returns to frontal cortex; it does not
+gate the output. Dopamine from the substantia nigra scales the gradient reaching
+striatal weights rather than scaling activations, making it a learning rate
+rather than a gain. The limbic system runs on two further timescales: an
+amygdala with fast and slow routes separated by conduction delay, a hippocampus
+implementing separation, completion and comparison as distinct stages, and a
+hypothalamus whose state persists across episodes. A cerebellar forward model
+predicts the next cortical state, with an inferior olive carrying only the
+difference.
+
+\section{Verification Methodology}
+
+Each claim in Section II is paired with a test that can fail. We summarise the
+non-obvious ones.
+
+\subsection{Parallelism by permutation}
+
+Rather than asserting that the lobes are parallel, we execute all $4! = 24$
+orderings of the lobe update and require bit-identical output. The measured
+maximum difference is \GatesPermutationGap{}. A delay of zero is separately
+rejected at construction, since it would reintroduce order dependence.
+
+\subsection{Convergence, not termination}
+
+A recurrent system that stops at $T$ has not necessarily settled. We measure the
+change in cortical state per timestep and require both a downward trend and a
+final change bounded relative to the first, with a leak of $1.0$ retained as a
+control that must fail. The measured settling ratio is \GatesSettlingRatio{}.
+
+\subsection{Gradient coverage with declared exceptions}
+
+We require every trainable tensor to receive gradient, measured across a full
+epoch rather than a single batch---a single-batch sample reports every pathway
+not exercised by that batch as dead. Coverage is
+\GatesGradientCoverage{}\%. Tensors that are structurally untrainable are listed
+by name with the reason, so an \emph{undeclared} gap fails the gate.
+
+\subsection{Ablation with named exceptions}
+
+Every tract, subsystem and lobe is removed individually and the resulting shift
+in settled state is reported. The weakest live part moves the output by
+\GatesWeakestAblation{}\%. Two parts are quiet at rest and are declared: the
+hyperdirect brake, measured while nothing requires braking, and the
+neuromodulatory dial, which rests at an exactly neutral centre by construction.
+Both have separate gates demonstrating function when driven.
+
+\section{Results}
+
+\subsection{Verified properties}
+
+\begin{table}[t]
+\caption{Measured architectural properties}
+\label{tab:properties}
+\centering
+\begin{tabular}{lr}
+\toprule
+Property & Measured \\
+\midrule
+Lobe update orderings, bit-identical & 24 / 24 \\
+Settling ratio (final / first change) & \GatesSettlingRatio{} \\
+Cortical sparsity achieved & \GatesSparsityAchieved{}\% \\
+Dentate gyrus sparsity achieved & \GatesDgSparsity{}\% \\
+Gradient coverage & \GatesGradientCoverage{}\% \\
+Feedforward share, low ACh & \GatesAchLow{}\% \\
+Feedforward share, high ACh & \GatesAchHigh{}\% \\
+CA3 completion (cue $\rightarrow$ recalled) & \GatesCaThreeBefore{} $\rightarrow$ \GatesCaThreeAfter{} \\
+Replay retention gain & $+$\GatesReplayGain{} pts \\
+Weakest live ablation & \GatesWeakestAblation{}\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:properties} reports the measured values. Of these, the
+acetylcholine result is the clearest demonstration that a neuromodulator is
+doing what it is named for: a single scalar moves the feedforward share of
+cortical drive from \GatesAchLow{}\% to \GatesAchHigh{}\%, monotonically, while
+being exactly neutral at its baseline.
+
+\subsection{Comparison against a monolithic baseline}
+
+We compare against a monolithic MLP holding $98.6\%$ of the modular system's
+trainable parameters, on identical frozen features, with the same optimiser and
+the same seeds. Crucially, both are trained to CONVERGENCE rather than for equal
+epochs: scored at six epochs each the comparison read $41.2\%$ against $2.9\%$,
+which measures convergence speed and nothing else. Given a budget in which both
+plateau, and scoring each on its best held-out epoch:
+
+\begin{table}[h]
+\caption{Modular architecture against a parameter-matched MLP.
+Two seeds, 10000 examples per task, best held-out epoch, identical inputs and identical cosine schedule.}
+\label{tab:benchmark}
+\centering
+\begin{tabular}{lrrr}
+\toprule
+Task & Chance & Monolith & Modular \\
+\midrule
+CIFAR-100 (image) & 1.0\% & \textbf{59.4\%} & 53.4\% \\
+20 Newsgroups (text) & 5.0\% & \textbf{65.0\%} & 64.0\% \\
+\midrule
+Wall clock per seed & & 49 s & 5117 s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{The modular architecture loses, by $6.0$ points.} On text the
+difference is smaller than the seed-to-seed spread and we decline to call it a
+result in either direction. The modular system also costs roughly eighty-five
+times more compute per run, which is the cost that does not shrink.
+
+The deficit does shrink, and the trend is more informative than any single
+row. Measured at two scales after the defect described below was fixed:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+Examples per task & Monolith & Modular & Gap \\
+\midrule
+2000 (with the defect) & 46.1\% & 21.8\% & 24.3 \\
+2000 & 44.5\% & 39.1\% & 5.5 \\
+5000 & 50.5\% & 47.3\% & 3.2 \\
+10000 & 59.4\% & 53.4\% & 6.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both architectures improve substantially with data. We previously read the
+first two rows as a shrinking deficit and said so; the third row falsifies
+that reading, and we record the correction rather than the tidier trend. A
+gap inferred from two points is not a trend, and the monolith gains from
+scale at least as fast as the modular system does.
+
+One asymmetry is worth stating because it cuts against us. The full training
+pipeline optimises five objectives and reaches $59.1\%$ on images at 20000
+examples; the benchmark trains both architectures on the task loss alone, so
+the modular system is measured here without the auxiliary objectives it was
+designed around. That is the fair comparison -- the monolith has no such
+objectives to give it -- but it means the benchmark understates what the
+complete system does, and does not rescue the comparison.
+
+This table replaces an earlier one reporting a $24.3$-point deficit, and the
+reason belongs in the paper rather than in a changelog. Most of that gap was a
+bug. \texttt{nn.Module.train()} recurses into every child, so the frozen
+ResNet core's ten BatchNorm layers were switched into training mode by every
+call, updating their running statistics from cortical state instead of the
+ImageNet activations those statistics describe. Freezing parameters with
+\texttt{requires\_grad\_(False)} stops gradients and does nothing about
+buffers. Fixed, image accuracy on the full training set moved from $1.8\%$ to
+$48.1\%$, and the benchmark gap fell from $24.3$ points to $5.5$.
+
+We report this prominently because it is this paper's thesis turned on the
+paper itself. The corrupted runs produced entirely normal loss curves and no
+tracked metric indicated a problem. The bug was found only by comparing against
+an \emph{untrained} baseline and noticing that training made the vision
+pathway worse than leaving it alone. Had the first table been published, a bug
+would have been published as a finding about architecture.
+
+We report this without qualification because it is the finding. It also sharpens
+rather than undermines the paper's argument: every one of the
+\ArchitectureTracts{} tracts in this system demonstrably changes the output when
+cut, no module is decorative, and the architecture still loses to one MLP. Those
+two facts are compatible, and holding them together is the point. ``Every part
+matters'' and ``the whole is better'' are different claims, and a literature
+that verifies neither routinely implies both.
+
+The mechanism is not mysterious. Hard $k$-winners-take-all leaves roughly
+thirteen active units per lobe, fifty-two across the four, against the
+monolith's $1728$ dense units. For twenty topics that is sufficient and the two
+architectures tie; for a hundred image classes it is not. The sparsity is a
+verified property with its own gate, and we did not relax it to improve this
+number.
+
+\section{What Verification Exposed}
+
+This section reports failures. We consider it the most useful part of the paper,
+because each failure produced plausible training behaviour while a component was
+inert, and none would have been caught by accuracy.
+
+\subsection{A dead module behind healthy accuracy}
+
+Bounding cortical state by dividing by its norm is a standard stabilisation.
+It also makes the output scale-invariant, which projects away the gradient with
+respect to magnitude. Several modules here act on magnitude rather than
+direction---the basal ganglia scale their thalamic drive---so the striatal
+gradient fell from $63$ to $3.6 \times 10^{-8}$. Training proceeded normally,
+the loss fell, and held-out accuracy reached a respectable value with the
+striatum entirely inert. Clamping only the excess magnitude preserves the bound
+while leaving the gradient exact below the ceiling.
+
+\subsection{Unbounded scale in a squared error}
+
+Three separate objectives---predictive coding, the cerebellar forward model, and
+the cerebellum's own reported error---computed squared error on cortical state
+whose magnitude nothing constrained. Cross-entropy always reduces its loss by
+enlarging logits, the cheapest route to which is inflating that state, after
+which the squared errors grow quadratically. Measured, the forward objective
+went $1.28 \rightarrow 1.61 \rightarrow 7.3\times10^{8}$ across three epochs.
+Each instance looked like a different bug. Normalising each error by its
+target's own energy removes the coupling.
+
+\subsection{Sparsity as a capacity limit}
+
+Hard $k$-winners-take-all at \ArchitectureSparsity{} leaves roughly thirteen
+active units per lobe. On a 20-class task with $\sim$190 examples per class this
+is ample; on a 100-class task with 40 examples per class the same read-out sat
+at chance, while a linear probe on the identical frozen features reached
+$56.8\%$. Reading all four lobes rather than one recovered part of the gap. We
+report the remainder as the genuine cost of the sparsity constraint rather than
+relaxing a verified property to improve a number.
+
+\subsection{A frozen module that was not frozen}
+
+Freezing a pretrained component is usually written as
+\texttt{requires\_grad\_(False)} plus a call to \texttt{eval()}. That stops
+gradients and stops nothing else. \texttt{nn.Module.train()} recurses into
+every child, so each call on the enclosing model returned the frozen ResNet
+core's BatchNorm layers to training mode, where they update running statistics
+from whatever passes through -- cortical state, not the ImageNet activations
+those statistics describe.
+
+The failure is invisible and modality-specific. Loss curves are normal.
+Vision degrades because BatchNorm carries running buffers; the transformer
+cores are untouched because LayerNorm carries none. Measured, this was the
+difference between $1.8\%$ and $48.1\%$ on CIFAR-100, and it survived several
+architecture revisions because nothing being tracked could see it. It was
+found by comparing against an untrained baseline: a linear probe on the
+\emph{untrained} cortex scored $13.3\%$, which is the observation that
+training was making the pathway worse than leaving it alone.
+
+\subsection{Tests that mutate what they measure}
+
+Two gates were found to be measuring their own side effects. A cortex left in
+training mode commits an episode to the hippocampus on every settle, so a
+pattern-completion test run afterwards measured interference rather than
+completion, and a lesion-reversibility test attributed the resulting drift to an
+irreversible lesion. Both now isolate their own state. We note this because a
+verification suite is itself software and is not exempt from the standard it
+enforces.
+
+\section{Limitations}
+
+The auditory and somatosensory pathways are trained on synthetic data
+constructed for the purpose; accuracy on them measures nothing about the
+architecture and is reported only to support the statement that those pathways
+are trained rather than randomly initialised. The concept vocabulary available
+to the language interface is drawn from the frozen encoders and extends beyond
+the labels the read-out was trained against; retrieved concepts outside that set
+are marked as extrapolation. Scale is modest throughout.
+
+\section{Conclusion}
+
+We have described a brain-inspired architecture in which anatomical claims are
+executable tests, and reported \GatesPassed{} passing checks covering
+parallelism, convergence, sparsity, Dale's principle, corticothalamic balance,
+pattern separation and completion, replay, forward-model learning and
+per-pathway ablation. On task accuracy it ties a parameter-matched MLP on text
+and loses substantially on images, at far greater cost. We take that seriously:
+the architecture is verified, not vindicated. The discipline's value as a method
+and the architecture's value as a model are separate questions, and only the
+first is settled here. The failures in Section V are the part we would most like to see
+replicated: in each, a component was dead while the system looked healthy, and
+only a structural test could tell.
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

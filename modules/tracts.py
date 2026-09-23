@@ -75,12 +75,42 @@ class Tract(nn.Module):
         self.projection = nn.Linear(source_dim or dim, dim)
         #  1.0 = intact, 0.0 = severed. Not a parameter; a lesion switch.
         self.register_buffer("gain", torch.ones(()))
+        #  1.0 = the signal is silenced but the tonic bias still flows.
+        #
+        #  NOT PERSISTED. This is an analysis handle, not something the model
+        #  learned, and adding it to the state dict invalidated every existing
+        #  checkpoint the moment it was introduced. A tract is muted to ask a
+        #  question and unmuted afterwards; that state has no business
+        #  surviving a save.
+        self.register_buffer("muted", torch.zeros(()), persistent=False)
 
     def forward(self, activation: torch.Tensor) -> torch.Tensor:
+        #  MUTING silences the SIGNAL and leaves the tonic bias; lesioning
+        #  removes the whole projection. Both are real interventions and they
+        #  answer different questions.
+        #
+        #  A lesion is the anatomical one: the axon is gone, tonic output and
+        #  all. But a Linear with zero input still emits its bias, so cutting
+        #  a tract also removes a CONSTANT -- and that constant, pushed
+        #  through the k-winners nonlinearity, changes which units win one
+        #  step later. Measured, that made two delay-2 feedback tracts look
+        #  as though information had arrived a step early when nothing had:
+        #  the knock-on from removing a constant is not the same as the
+        #  signal itself, and only muting can tell them apart.
+        if bool(self.muted):
+            activation = torch.zeros_like(activation)
         return self.projection(activation) * self.gain
 
     def lesion(self, severed: bool = True) -> None:
         self.gain.fill_(0.0 if severed else 1.0)
+
+    def mute(self, silent: bool = True) -> None:
+        """Carry no signal, but keep emitting the tonic bias.
+
+        The intervention that isolates INFORMATION transmission from the
+        constant a projection contributes regardless of its input.
+        """
+        self.muted.fill_(1.0 if silent else 0.0)
 
     @property
     def severed(self) -> bool:

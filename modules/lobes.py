@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 
 import config
+from modules.laminar import LaminarShell
 
 
 
@@ -42,6 +43,9 @@ def sinusoidal_positions(n: int, dim: int, device) -> torch.Tensor:
 
 
 class Lobe(nn.Module):
+    #  Overridden by each real lobe; selects that lobe's pretrained teacher.
+    LOBE_NAME = "generic"
+
     """LATENT_DIM -> LOBE_HIDDEN_DIM -> LATENT_DIM, residual.
 
     Pre-norm + residual is not decoration: four of these run in series on the
@@ -60,12 +64,26 @@ class Lobe(nn.Module):
         super().__init__()
         self.dim = dim
         self.norm = nn.LayerNorm(dim)
-        self.net = nn.Sequential(
+        # THE OPERATOR. Where a matching pretrained network exists, that IS
+        # the operator -- the random MLP below is not built at all, so it
+        # cannot sit unused and dark in the gradient count. See
+        # modules/pretrained_lobes.py for which teacher each lobe gets and why.
+        self.core = None
+        if config.PRETRAINED_LOBES and self.LOBE_NAME != "generic":
+            from modules.pretrained_lobes import build_core
+            self.core = build_core(self.LOBE_NAME, dim)
+        self.net = None if self.core is not None else nn.Sequential(
             nn.Linear(dim, hidden),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden, dim),
         )
+        # Stage 4: the shared cortical microcircuit every area has. The lobe's
+        # own operator above is what makes it THIS area; the shell is what
+        # makes it cortex.
+        self.laminar = LaminarShell(dim=dim, dropout=dropout)
+        #  set per timestep by the settling loop; None = resting sparsity
+        self.sparsity_now: float | None = None
 
     @property
     def device(self) -> torch.device:
@@ -85,9 +103,32 @@ class Lobe(nn.Module):
         # tensors. Moving an already-correct tensor is a no-op.
         return x.to(self.device) if x.device != self.device else x
 
+    def operate(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the lobe's operator. Accepts (B, dim) or (B, N, dim)."""
+        return self.core(x) if self.core is not None else self.net(x)
+
+    def sequence_contribution(self, sequence: torch.Tensor) -> torch.Tensor:
+        """What this lobe makes of its sensory sequence, as (B, dim).
+
+        Overridden by the lobes that have a sequence operator. It exists as
+        one name so the settling loop can compute this ONCE per percept: the
+        sensory sequence does not change while cortex settles, so running the
+        operator again at every timestep recomputes an identical tensor. With
+        pretrained cores that redundancy dominated the whole forward pass --
+        twelve ResNet and transformer passes per lobe per percept instead of
+        one. The cached value is bit-identical, so gradients are unaffected.
+        """
+        raise NotImplementedError(
+            "%s has no sequence operator" % type(self).__name__
+        )
+
+    @property
+    def reads_sequences(self) -> bool:
+        return type(self).sequence_contribution is not Lobe.sequence_contribution
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self._check(x)
-        return x + self.net(self.norm(x))
+        return x + self.laminar.l23(self.operate(self.norm(x)), self.sparsity_now)
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +174,8 @@ class OccipitalLobe(Lobe):
     fuse two streams on the image path (PROJECT.md sections 2.1 and 4).
     """
 
+    LOBE_NAME = "occipital"
+
     role = "local feature extraction (vision)"
 
     def __init__(
@@ -151,7 +194,11 @@ class OccipitalLobe(Lobe):
         self.groups = groups
         # Conv1d with groups=g over a length-1 sequence IS a grouped linear
         # layer, and is the cheapest way to express one in PyTorch.
-        self.net = nn.Sequential(
+        #  Only when there is no pretrained convolution to use instead. The
+        #  ResNet core is itself a convolution, so the inductive bias this
+        #  grouped stack expressed is preserved rather than traded away --
+        #  it is the same operation, with ImageNet weights behind it.
+        self.net = None if self.core is not None else nn.Sequential(
             nn.Conv1d(dim, hidden, kernel_size=1, groups=groups),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -162,11 +209,15 @@ class OccipitalLobe(Lobe):
     def forward(self, x: torch.Tensor,
                 sequence: torch.Tensor | None = None) -> torch.Tensor:
         x = self._check(x)
-        h = self.net(self.norm(x).unsqueeze(-1)).squeeze(-1)
-        out = x + self.mix(h)
+        h = self.operate(self.norm(x))
+        out = x + self.laminar.l23(self.mix(h), self.sparsity_now)
         if sequence is not None:
-            out = out + self.receptive_fields(sequence)
+            out = out + (sequence if sequence.dim() == 2
+                         else self.receptive_fields(sequence))
         return out
+
+    def sequence_contribution(self, sequence: torch.Tensor) -> torch.Tensor:
+        return self.receptive_fields(sequence)
 
     def receptive_fields(self, sequence: torch.Tensor) -> torch.Tensor:
         """Grouped local filtering at EVERY real spatial position.
@@ -179,9 +230,8 @@ class OccipitalLobe(Lobe):
         patches of the ResNet grid and locality means what it says.
         """
         b, n, d = sequence.shape
-        flat = sequence.reshape(b * n, d).unsqueeze(-1)
-        filtered = self.net(self.norm(sequence.reshape(b * n, d)).unsqueeze(-1))
-        filtered = filtered.squeeze(-1).reshape(b, n, d)
+        normed = self.norm(sequence.reshape(b * n, d)).reshape(b, n, d)
+        filtered = self.operate(normed)
         return self.mix(filtered.mean(dim=1))
 
 
@@ -198,6 +248,8 @@ class ParietalLobe(Lobe):
     it an operator that the other lobes lack is what makes the ablation
     meaningful: removing it now removes a capability, not just parameters.
     """
+
+    LOBE_NAME = "parietal"
 
     role = "spatial relations (attention over positions)"
 
@@ -221,7 +273,12 @@ class ParietalLobe(Lobe):
         self.attn_norm = nn.LayerNorm(self.slot)
         # Attention over REAL sensory positions (stage 2), separate from the
         # slot attention above which operates on the recurrent state.
-        self.grid_attn = nn.MultiheadAttention(
+        #  Not built when a pretrained attention layer is available: MiniLM's
+        #  encoder layer IS attention between positions, which is the operation
+        #  this module existed to perform. Keeping both would leave one of them
+        #  without a gradient and make the ablation table claim a pathway that
+        #  does nothing.
+        self.grid_attn = None if self.core is not None else nn.MultiheadAttention(
             embed_dim=dim, num_heads=4, dropout=dropout, batch_first=True
         )
         self.grid_norm = nn.LayerNorm(dim)
@@ -235,8 +292,12 @@ class ParietalLobe(Lobe):
         attended, _ = self.attn(grid, grid, grid, need_weights=False)
         x = x + attended.reshape(b, self.dim)
         if sequence is not None:
-            x = x + self.spatial_attention(sequence)
-        return x + self.net(self.norm(x))
+            x = x + (sequence if sequence.dim() == 2
+                     else self.spatial_attention(sequence))
+        return x + self.laminar.l23(self.operate(self.norm(x)), self.sparsity_now)
+
+    def sequence_contribution(self, sequence: torch.Tensor) -> torch.Tensor:
+        return self.spatial_attention(sequence)
 
     def spatial_attention(self, sequence: torch.Tensor) -> torch.Tensor:
         """Attend across REAL positions -- the 49 patches of the ResNet grid.
@@ -252,7 +313,14 @@ class ParietalLobe(Lobe):
         placed = sequence + sinusoidal_positions(
             sequence.shape[1], sequence.shape[2], sequence.device
         )
-        attended, _ = self.grid_attn(placed, placed, placed, need_weights=False)
+        if self.core is not None:
+            #  A pretrained transformer layer is self-attention plus its own
+            #  feed-forward block; the position codes above are still required,
+            #  because attention remains permutation-equivariant no matter how
+            #  well trained it is.
+            attended = self.core(placed)
+        else:
+            attended, _ = self.grid_attn(placed, placed, placed, need_weights=False)
         return self.grid_norm(attended).mean(dim=1)
 
 
@@ -267,6 +335,8 @@ class TemporalLobe(Lobe):
     The GRU's hidden state is also what a memory-match role would need, and is
     where a hippocampal module would attach if one is ever built.
     """
+
+    LOBE_NAME = "temporal"
 
     role = "meaning, language, memory (recurrent)"
 
@@ -302,8 +372,12 @@ class TemporalLobe(Lobe):
         out, _ = self.rnn(seq)
         x = x + out.reshape(b, self.dim)
         if sequence is not None:
-            x = x + self.read_sequence(sequence)
-        return x + self.net(self.norm(x))
+            x = x + (sequence if sequence.dim() == 2
+                     else self.read_sequence(sequence))
+        return x + self.laminar.l23(self.operate(self.norm(x)), self.sparsity_now)
+
+    def sequence_contribution(self, sequence: torch.Tensor) -> torch.Tensor:
+        return self.read_sequence(sequence)
 
     def read_sequence(self, sequence: torch.Tensor) -> torch.Tensor:
         """Run the REAL token or frame sequence through a GRU.
@@ -314,7 +388,15 @@ class TemporalLobe(Lobe):
         Whisper frames in time order. Reversing it now changes the answer,
         which is the whole point of using a recurrent operator.
         """
-        out, hidden = self.seq_rnn(sequence)
+        #  The GRU SURVIVES the pretrained rewrite, and deliberately. There is
+        #  no pretrained GRU to drop in here, and recurrence is temporal's
+        #  inductive bias -- the thing that makes it a different network from
+        #  parietal rather than a second attention stack with another name.
+        #  So the pretrained Whisper layer, which was trained on exactly this
+        #  kind of frame sequence, provides the features and the GRU still
+        #  does the recurring over them.
+        prepared = self.core(sequence) if self.core is not None else sequence
+        out, hidden = self.seq_rnn(prepared)
         return self.seq_norm(hidden[-1])
 
 
@@ -342,6 +424,8 @@ class FrontalLobe(Lobe):
     config.FRONTAL_FUSION_MODE to change the tradeoff.
     """
 
+    LOBE_NAME = "frontal"
+
     role = "convergence, fusion, decision"
 
     def __init__(
@@ -362,6 +446,10 @@ class FrontalLobe(Lobe):
             nn.Linear(len(self.slots) * dim, dim) if mode == "concat" else nn.Identity()
         )
         self._last_slots: dict[str, bool] = {s: False for s in self.slots}
+        #  Frontal's own sequence operator -- see `select` for why it is a
+        #  relevance gate and not a fourth copy of somebody else's operator.
+        self.relevance = nn.Linear(dim, 1)
+        self.seq_norm = nn.LayerNorm(dim)
 
     @property
     def last_active_slots(self) -> dict[str, bool]:
@@ -415,7 +503,44 @@ class FrontalLobe(Lobe):
             fused = self._check(streams)
         else:
             fused = self.fuse_streams(streams)
-        return super().forward(fused)
+        return fused + self.laminar.l23(self.operate(self.norm(fused)),
+                                        self.sparsity_now)
+
+    def sequence_contribution(self, sequence: torch.Tensor) -> torch.Tensor:
+        return self.select(sequence)
+
+    def select(self, sequence: torch.Tensor) -> torch.Tensor:
+        """Score every position for relevance and integrate by that score.
+
+        WHY FRONTAL READS THE INPUT AT ALL. It did not, until the routing
+        table was measured: on a text input only temporal received the
+        sequence, and occipital, parietal and frontal saw nothing but echoes
+        arriving over the tracts. Three of four networks were not parsing the
+        input. Prefrontal cortex is not sensory-blind in a real brain either
+        -- the mediodorsal thalamus projects to it directly -- so the fix is
+        anatomically ordinary as well as necessary.
+
+        WHY THIS OPERATOR AND NOT ANOTHER. The claim that the lobes are four
+        different networks only survives if each reads a sequence its own way,
+        so a fourth attention stack or a second GRU here would quietly falsify
+        the architecture. Occipital filters locally, parietal compares
+        positions, temporal carries order. Frontal does the thing prefrontal
+        cortex is characterised by: it decides which parts of the input are
+        worth holding. A learned relevance score per position, softmaxed into
+        weights, integrates the sequence by task salience rather than by
+        proximity, arrangement or order. Selection, not comparison.
+
+        The score is computed from the Qwen features, so the pretrained
+        language model contributes here too -- but it contributes FEATURES.
+        What gets kept is decided by a head this system trained itself.
+        """
+        placed = sequence + sinusoidal_positions(
+            sequence.shape[1], sequence.shape[2], sequence.device
+        )
+        features = self.core(placed) if self.core is not None else placed
+        features = self.seq_norm(features)
+        weights = self.relevance(features).softmax(dim=1)
+        return (features * weights).sum(dim=1)
 
 
 class Cortex(nn.Module):

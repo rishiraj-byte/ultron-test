@@ -100,6 +100,9 @@ class BrainAI(nn.Module):
 
         # True once a checkpoint is loaded. Drives the honesty in Answer.
         self.trained = False
+        #  What training, if any, produced the weights currently loaded.
+        #  Empty means nobody has trained this model -- see trainable_state.
+        self.training_record: dict[str, Any] = {}
 
         self.bus = ActivationBus()
         self._recorder: ActivationRecorder | None = None
@@ -449,12 +452,46 @@ class BrainAI(nn.Module):
             "lobes=" + ",".join(
                 f"{name}:{type(self.cortex[name]).__name__}" for name in config.LOBES
             ),
+            #  Which pretrained network sits inside each lobe. Two builds can
+            #  agree on every class name and still mean entirely different
+            #  things by the same weights.
+            "cores=" + ",".join(
+                f"{name}:{self._core_name(name)}" for name in config.LOBES
+            ),
+            #  And finally the tensors themselves. The list above is a
+            #  human-readable summary of the differences someone thought to
+            #  enumerate; this catches the ones nobody did. Adding the laminar
+            #  shells changed every lobe's parameter set while leaving every
+            #  entry above identical, so a stale checkpoint sailed past this
+            #  guard and failed later as a wall of two hundred missing keys.
+            "tensors=" + self._tensor_fingerprint(),
         ]
         return "|".join(parts)
+
+    def _core_name(self, lobe: str) -> str:
+        core = getattr(self.cortex[lobe], "core", None)
+        return "mlp" if core is None else type(core.teacher).__name__
+
+    def _tensor_fingerprint(self) -> str:
+        """A short hash over every cortical tensor's name and shape."""
+        import hashlib
+
+        catalogue = ";".join(
+            f"{name}:{tuple(tensor.shape)}"
+            for name, tensor in sorted(self.cortex.state_dict().items())
+        )
+        return hashlib.sha1(catalogue.encode()).hexdigest()[:12]
 
     def trainable_state(self) -> dict[str, Any]:
         return {
             "signature": self.architecture_signature(),
+            #  PROVENANCE. Without this a checkpoint saved by a round-trip
+            #  TEST is indistinguishable from one produced by an actual
+            #  training run -- both load, both set `trained = True`, and any
+            #  status report built on "does it load" then says the lobes are
+            #  trained when they are random. That happened, and this field is
+            #  the fix: `training_record` is empty unless train.py filled it.
+            "training_record": dict(self.training_record),
             "latent_dim": config.LATENT_DIM,
             "num_classes": config.NUM_CLASSES,
             "label_set": config.LABEL_SET,
@@ -492,6 +529,7 @@ class BrainAI(nn.Module):
                 f"or delete {path} to start from an untrained system."
             )
 
+        self.training_record = dict(state.get("training_record") or {})
         self.thalamus.load_state_dict(state["thalamus"], strict=strict)
         self.cortex.load_state_dict(state["cortex"], strict=strict)
         self.basal_ganglia.load_state_dict(state["basal_ganglia"], strict=strict)
@@ -553,7 +591,18 @@ def build_brain(
     brain = BrainAI(device=device, dropout=dropout)
     brain.load_labels()
     if load_checkpoint:
-        brain.load()
+        try:
+            brain.load()
+        except ValueError as stale:
+            #  A checkpoint from an older architecture is not an error worth
+            #  refusing to start over -- the v2 rebuild changed the lobes,
+            #  so every v1 checkpoint is now stale by construction. Say so
+            #  loudly, once, and continue untrained rather than dying at
+            #  import time in every script that touches the brain.
+            print("=" * 70)
+            print("STALE CHECKPOINT -- starting from an UNTRAINED system.")
+            print(stale)
+            print("=" * 70)
     brain.eval()
     return brain
 

@@ -479,6 +479,16 @@ def main() -> int:
         print("  every trainable tensor in the brain trained")
 
     brain.trained = True
+    #  Stamp what actually produced these weights. A checkpoint with no such
+    #  record is one nobody trained -- a test artefact, most likely -- and
+    #  status.py reports it as exactly that rather than as a trained model.
+    import datetime
+    brain.training_record = {
+        "epochs": int(args.epochs),
+        "finished": datetime.datetime.now().isoformat(timespec="seconds"),
+        "objectives": sorted(trained_objectives) if "trained_objectives" in dir()
+                      else [],
+    }
     brain.eval()
     out = type(config.DEFAULT_CHECKPOINT)(args.out)
     brain.save(out)

@@ -109,22 +109,51 @@ def lobe_layers(prefix: str, lobe: nn.Module, is_frontal: bool = False) -> list[
                       dim, "linear", True)
         )
 
-    hidden_kind = "linear"
-    hidden_label = "hidden (pre)"
-    if isinstance(lobe.net[0], nn.Conv1d):          # occipital: grouped/local
-        hidden_label = f"hidden x{lobe.net[0].groups} local"
-    layers.append(
-        LayerSpec(f"{prefix}.net.0", hidden_label, _width(lobe.net[0], dim),
-                  hidden_kind)
-    )
-    layers.append(
-        LayerSpec(
-            f"{prefix}.net.1", "hidden GELU", _width(lobe.net[0], dim), "gelu", True
+    core = getattr(lobe, "core", None)
+    if core is not None:
+        # The operator is a FROZEN PRETRAINED NETWORK, so the diagram shows
+        # what it actually is -- the teacher's name and width -- rather than a
+        # generic hidden layer. `lobe.net` does not exist in this mode, and
+        # reaching for it is what used to crash this function.
+        teacher = getattr(core, "teacher_name", type(core.teacher).__name__)
+        #  Names must resolve against the real module tree, and widths must be
+        #  what those modules actually EMIT. Declaring the teacher's internal
+        #  width for the wrapper was wrong twice over: `core` returns cortical
+        #  width, and `core.in` / `core.out` are not modules at all -- they are
+        #  called `into` and `back`.
+        if isinstance(core.into, nn.Linear):
+            #  The projection's OWN output width. A convolutional stage takes
+            #  a different width in than it gives out -- ResNet-50's layer4
+            #  takes 1024 and returns 2048 -- so using teacher_dim here
+            #  declared a column that never matched what was captured.
+            layers.append(
+                LayerSpec(f"{prefix}.core.into", "into %s" % teacher,
+                          core.into.out_features, "linear", True)
+            )
+        layers.append(
+            LayerSpec(f"{prefix}.core.back", "%s (frozen)" % teacher,
+                      dim, "gelu", True)
         )
-    )
-    layers.append(
-        LayerSpec(f"{prefix}.net.3", "project", _width(lobe.net[3], dim), "linear")
-    )
+        layers.append(
+            LayerSpec(f"{prefix}.core", "back to cortex", dim, "linear")
+        )
+    else:
+        hidden_kind = "linear"
+        hidden_label = "hidden (pre)"
+        if isinstance(lobe.net[0], nn.Conv1d):      # occipital: grouped/local
+            hidden_label = f"hidden x{lobe.net[0].groups} local"
+        layers.append(
+            LayerSpec(f"{prefix}.net.0", hidden_label, _width(lobe.net[0], dim),
+                      hidden_kind)
+        )
+        layers.append(
+            LayerSpec(f"{prefix}.net.1", "hidden GELU", _width(lobe.net[0], dim),
+                      "gelu", True)
+        )
+        layers.append(
+            LayerSpec(f"{prefix}.net.3", "project", _width(lobe.net[3], dim),
+                      "linear")
+        )
     if hasattr(lobe, "mix"):                        # occipital: cross-band mix
         layers.append(
             LayerSpec(f"{prefix}.mix", "mix bands", _width(lobe.mix, dim), "linear")
