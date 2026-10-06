@@ -25,3 +25,11 @@ __pycache__/
 
 # Throwaway pipeline wrappers from interactive sessions.
 v3_*.sh
+
+# v2.B: your own memories (what you taught it) stay on this machine.
+v2b/memory/
+# v2.B consolidated memory (training examples as vectors, rebuilt by train),
+# including the rollback copies (~0.4-0.6 GB each)
+checkpoints/*.npz
+# v2.B live training log: rewritten by every run, read by v2b.monitor
+results/*.jsonl

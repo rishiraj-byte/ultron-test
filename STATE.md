@@ -24,6 +24,68 @@ v1 and v2 share `modules/`. **v3 is a clean fork in `v3/` and touches nothing el
 
 ---
 
+## v2.B -- a fourth build (first 2026-09-24, rebuilt 2026-09-27)
+
+Self-contained in `v2b/`, like v3. Frozen open-weight networks placed by anatomy:
+SigLIP 2 So400m vision split into OCCIPITAL (blocks 1-13) and the VENTRAL STREAM
+(14-27, ending in IT); Depth Anything V2 Small as PARIETAL; LAION CLAP as TEMPORAL
+(auditory cortex), whose sound lexicon reaches frontal over the ARCUATE
+FASCICULUS; SigLIP 2 text as FRONTAL, holding 1,629 names (CIFAR-100 + ImageNet,
+ESC-50 + AudioSet). A 3.30M trained circuit: thalamus (+TRN), dorsal stream, STS,
+POT in a 3-pass loop with frontal; a hippocampus with a 237,001-entry RAG database,
+a CA1 vote gated by familiarity, and directly matched taught episodes; an
+amygdala that hears cortex and hippocampus and gates motor (GO / HOLD +
+confidence). No language model. Write-up: `v2b/README.md`; teaching: `v2b/LEARN.md`.
+
+```
+v2.B test accuracy        images 91.2%  (CIFAR-100, 10,000)
+                          images 87.9%  (Tiny-ImageNet, 10,000, 200 classes)
+                          images 84.4%  (ImageNet photos, 7,820, 782 classes; untrained 69.7%)
+                          sounds 87.5%  (ESC-50 fold 5, 400; was 95.2% before AudioSet/FSD50K)
+                          sounds 35.2%  (AudioSet eval, 4,000, 429 names; untrained 20.1%)
+                          sounds 65.8%  (FSD50K eval, 4,000, 167 names; untrained 39.2%)
+                          never-trained 77.4%  (Imagenette -- a development set now)
+training data             178,792 pictures (CIFAR, Tiny, 782 ImageNet classes as photos)
+                          + 58,209 sounds (ESC-50, AudioSet bal.+unbal., FSD50K);
+                          16 epochs with label smoothing 0.1 + 10% feature dropout
+                          (round 6: pooled validation 81.8% -> 82.3%; more data alone
+                          had stopped paying). Best epoch 16.
+expertise                 cautious keep 0.25 answers; a stored (familiar) answer is re-read
+                          at 0.60, chosen on validation. Memory trust 0.075.
+taught episodes           fire at >= 0.975 similarity (measured per model: q99.5 of
+                          same-class, different-item similarity); 0.80 renamed a whole class
+trade-off, chosen on val  ESC-50 -7 points for +20 / +27 on the broad sound tests;
+                          previous model kept at checkpoints/v2b_expertise.pt
+CIFAR-only on Tiny-ImageNet  33.0%, BELOW zero-shot 56.8% (see v2b/README.md finding 5)
+amygdala                  answers 97% of images at 93.1%; holds back 3% that are 37.8% right
+v2.B checks               42 pass, 0 fail
+```
+
+```bash
+python -m v2b.dashboard         # 7 tabs incl. WEIGHTS (every tensor) and ACTIVITY (every block)
+python -m v2b.verify_v2b        # 42 checks
+python -m v2b.train --watch     # ~2.5 h train (cache 58 GB), live window
+python -m v2b.train --refit     # reuse the cortex; redo memory/expertise/amygdala (~20 min)
+python -m v2b.diagnose          # error breakdown per test set
+python -m v2b.monitor           # the live window on its own
+python -m v2b.lessons 1         # ...7
+```
+
+`checkpoints/v2b.pt` and `checkpoints/v2b_memory.npz` are what the dashboard loads;
+the checkpoint refuses to load into different networks. `data/v2b_cache/` (58 GB)
+is rebuildable. `data/ESC-50-master/` is CC BY-NC. `v2b/memory/` holds what the
+user taught it and is gitignored.
+
+**v2.B traps.** Hugging Face was measured at ~54 KB/s on 2026-09-27 and its
+default transfer backend stalled at 0 bytes; `HF_HUB_DISABLE_XET=1` fixed it.
+New downloads then failed with WinError 1314 (no symlink privilege): patch
+`huggingface_hub.file_download.are_symlinks_supported` to return False before
+downloading. CLAP ships only `pytorch_model.bin` -- a safetensors-only filter
+silently skips its weights. fast.ai's Imagenette bucket ran at 12 KB/s; the
+Hugging Face copy `johnowhitaker/imagenette2-320` works. Models load local-first.
+
+---
+
 ## Verified numbers
 
 ```

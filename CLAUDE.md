@@ -1,6 +1,6 @@
 # brain-ai
 
-A brain-inspired AI in three builds. **Read `STATE.md` before doing anything** — it
+A brain-inspired AI in four builds. **Read `STATE.md` before doing anything** — it
 carries the verified numbers, which checkpoint to trust, and the traps that have
 already cost hours. This file is the short version that loads automatically.
 
@@ -19,6 +19,21 @@ text, image, audio, video and sensor; all 9 input combinations are verified.
 
 **v3 is a clean fork under `v3/`** that imports nothing from v1 or v2 and modifies
 nothing outside its own directory. Keep it that way.
+
+**v2.B is a fourth build under `v2b/`**, self-contained on the same terms. Frozen
+open-weight networks placed by anatomy (SigLIP 2 So400m vision split occipital /
+ventral stream, Depth Anything V2 Small as parietal, LAION CLAP as temporal with
+an arcuate path to frontal, SigLIP 2 text as frontal with 1,629 names), a 3.30M
+trained circuit, a hippocampus with a RAG database and a familiarity gate, an
+amygdala that gates motor (GO / HOLD + confidence), no language model. Image,
+audio and video only -- no text input. Trained on 178,792 pictures (CIFAR-100,
+Tiny-ImageNet, 782 ImageNet classes as photos) and 58,209 sounds (ESC-50,
+AudioSet, FSD50K), with label smoothing + feature dropout. Test: CIFAR-100 91.2%,
+Tiny-ImageNet 87.9%, ImageNet photos 84.4%, ESC-50 87.5% (was 95.2% before the
+broad sound data), AudioSet 35.2%, FSD50K 65.8%. Train with `--candidate` so a
+run never overwrites the deployed model. `python -m v2b.train --watch` shows training live; `--refit`
+redoes everything after the cortex. Checks: `python -m v2b.verify_v2b` (42).
+See `v2b/README.md`.
 
 ## Before you change anything
 
