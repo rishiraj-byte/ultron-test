@@ -14,7 +14,7 @@ image / sound / video (-> 8 frames + soundtrack)
   STS            sight (ventral) meets sound (temporal)                              trained
   POT            fuses dorsal + STS  <-- 3 passes -->  FRONTAL (SigLIP 2 text,       trained
                                                         1,629 names)
-  HIPPOCAMPUS    entorhinal keys -> RAG DATABASE (237,001) -> CA1 vote,              trained
+  HIPPOCAMPUS    entorhinal keys -> RAG DATABASE (339,364) -> CA1 vote,              trained
                  gated by FAMILIARITY; + episodes you taught it
   AMYGDALA       hears cortex AND the hippocampus -> GO / HOLD + confidence          trained
   MOTOR          GO: the answer.  HOLD: "not sure -- maybe X".
@@ -37,7 +37,9 @@ That's 1.23 billion frozen weights. v2.B trains 3.30 million of its own:
 - CIFAR-100's 100 classes plus ImageNet's 1,000 (including "web site" and "monitor"): 1,075 picture names;
 - ESC-50's 50 sounds plus AudioSet's 527: 554 sound names.
 
-v2.B trains on about 1,560 of these names: ~1,070 picture names (CIFAR-100, Tiny-ImageNet, and 782 ImageNet classes as real photos) and ~490 sound names (ESC-50, AudioSet, FSD50K). It recognises the rest zero-shot.
+v2.B trains on about 1,560 of these names: ~1,070 picture names (CIFAR-100, Tiny-ImageNet, and 782 ImageNet classes as real photos, plus art, cartoons, toys and pencil sketches of them) and ~490 sound names (ESC-50, AudioSet, FSD50K). It recognises the rest zero-shot.
+
+**Deployed: round 9** (2026-11-02). 281,155 training pictures, 58,209 training sounds, 8 epochs. Every round, and why each one was or was not deployed, is in `../STATE.md`.
 
 ## Commands
 
@@ -77,7 +79,7 @@ One window with seven tabs. **FOCUS** (or a click on the graph) picks the region
 | ACTIVITY | per-block activation maps, attention maps, and which neurons fired in every block |
 | WEIGHTS | every weight tensor, as a heatmap, histogram and statistics. **x live input** shows which connections carried signal; **zero it** / **restore** edit weights live |
 | MEMORY | cortex vs memory vs final answer; CA1's familiarity; the amygdala's verdict; the RAG database; your episodes; the pictures recalled |
-| RAG | the hippocampus as a network, every state and gate live: POT vector → entorhinal key → the store's 32 most active units → CA1's vote → the familiarity and trust gates → frontal's sum, name by name (cortex + memory + yours = final) → the amygdala's 7 inputs, 32 hidden units and value → the GO/HOLD gate → motor. Below it, **the whole store as one layer**: all 237,001 memories, one cell each, lit by how strongly this percept activates them, with the 32 recalled ringed. Hover any cell to see which memory it is, its picture, its rank and its share of the vote. Double-click the hippocampus, amygdala or database on the graph to open it |
+| RAG | the hippocampus as a network, every state and gate live: POT vector → entorhinal key → the store's 32 most active units → CA1's vote → the familiarity and trust gates → frontal's sum, name by name (cortex + memory + yours = final) → the amygdala's 7 inputs, 32 hidden units and value → the GO/HOLD gate → motor. Below it, **the whole store as one layer**: all 339,364 memories, one cell each, lit by how strongly this percept activates them, with the 32 recalled ringed. Hover any cell to see which memory it is, its picture, its rank and its share of the vote. Double-click the hippocampus, amygdala or database on the graph to open it |
 | OVERLAY | where POT looked, and the depth map |
 | GUIDE | for each region: what it does in a brain, what v2.B uses, where the two differ, and its live numbers |
 
@@ -85,20 +87,23 @@ One window with seven tabs. **FOCUS** (or a click on the graph) picks the region
 
 | | untrained | cortex | memory alone | **final** |
 |---|---|---|---|---|
-| images, CIFAR-100 (10,000; chance 1%) | 37.4% | 91.2% | 90.9% | **91.2%** |
-| images, Tiny-ImageNet (10,000; 200 classes) | 56.8% | 87.8% | 87.8% | **87.9%** |
-| images, **ImageNet photos** (7,820; 782 classes) | 69.7% | 84.3% | 84.0% | **84.4%** |
-| sounds, ESC-50 fold 5 (400; 50 classes) | 47.2% | 87.0% | 83.5% | **87.5%** |
-| sounds, **AudioSet eval** (4,000; 429 names) | 20.1% | 35.2% | 32.3% | **35.2%** |
-| sounds, **FSD50K eval** (4,000; 167 names) | 39.2% | 65.5% | 60.8% | **65.8%** |
-| never-trained classes, Imagenette (2,000; 10 classes) -- a development set now | 79.5% | 77.4% | | **77.4%** |
+| images, CIFAR-100 (10,000; chance 1%) | 37.4% | 91.3% | 91.0% | **91.4%** |
+| images, Tiny-ImageNet (10,000; 200 classes) | 56.8% | 88.4% | 88.0% | **88.4%** |
+| images, **ImageNet photos** (7,820; 782 classes) | 69.7% | 86.2% | 86.7% | **86.4%** |
+| images, **ImageNet-R**: art, cartoons, toys, origami (6,041; 198 classes) | 68.6% | 94.5% | 94.0% | **94.7%** |
+| images, **ImageNet-Sketch**: pencil drawings (2,829; 918 classes) | 61.4% | 74.9% | 75.5% | **75.5%** |
+| sounds, ESC-50 fold 5 (400; 50 classes) | 47.2% | 89.5% | 85.0% | **89.5%** |
+| sounds, **AudioSet eval** (4,000; 429 names) | 20.1% | 35.2% | 32.6% | **35.9%** |
+| sounds, **FSD50K eval** (4,000; 167 names) | 39.2% | 65.6% | 60.5% | **65.9%** |
+| never-trained classes, Imagenette (2,000; 10 classes) -- a development set now | 79.5% | 73.3% | | **73.3%** |
 
 Every row is scored against all 1,629 names, by the exact name.
-- "cortex" is the cortex as it answered, with expertise (below). At the cautious strength alone (0.25), CIFAR's cortex scores 89.0%.
+- "cortex" is the cortex as it answered, with expertise (below). At the cautious strength alone (0.30), CIFAR's cortex scores 89.1%.
 - The untrained CIFAR figure is low because an exact CIFAR name must beat ImageNet near-synonyms ("bear" vs "brown bear").
 - AudioSet's eval is hard by nature: 429 names, each clip given ONE of its several labels, and many labels are broad ("music", "vehicle").
 - Imagenette has guided design choices (memory's familiarity gate, expertise), and its classes now have trained neighbours, so it is no longer a clean test.
-- Per pass of the frontal loop, CIFAR (cautious strength): 88.3%, 88.9%, 89.0%.
+- Per pass of the frontal loop, CIFAR (cautious strength): 87.7%, 89.2%, 89.1%.
+- ImageNet-R and ImageNet-Sketch test pictures are kept apart from their training pictures by a hash split, and every test picture within 0.93 cosine of a training picture (mirror images included) is dropped.
 
 **How it got here** (each column measured on the same tests):
 
@@ -113,16 +118,31 @@ Every row is scored against all 1,629 names, by the exact name.
 | FSD50K eval | -- | 36.9% | 63.4% | 65.6% | **65.8%** |
 | Never-trained (dev) | 74.9% | 81.9% | 81.1% | 79.0% | 77.4% |
 
+That was round 6. Rounds 7-9 (round 6's column repeated; round 7 was not deployed):
+
+| | round 6 | round 7: + 88 photos/class, art + sketches, VGGSound | round 8: same, without VGGSound | **round 9: same, 8 epochs (now)** |
+|---|---|---|---|---|
+| pooled validation | 82.3% | 82.1% | 82.4% | **82.8%** |
+| CIFAR-100 | 91.2% | 90.8% | 90.7% | **91.4%** |
+| Tiny-ImageNet | 87.9% | 87.8% | 88.0% | **88.4%** |
+| ImageNet photos | 84.4% | 86.1% | 86.2% | **86.4%** |
+| ImageNet-R (art, toys) | 78.2% (cortex) | 94.2% | 93.9% | **94.7%** |
+| ImageNet-Sketch | 68.1% (cortex) | 75.5% | 75.3% | **75.5%** |
+| ESC-50 sounds | 87.5% | 86.8% | 89.5% | **89.5%** |
+| AudioSet eval | 35.2% | 34.6% | 34.3% | **35.9%** |
+| FSD50K eval | 65.8% | 64.0% | 65.1% | **65.9%** |
+| Never-trained (dev) | 77.4% | 74.4% | 75.1% | 73.3% |
+
 **The amygdala.**
 
 | | images | sounds (ESC-50) |
 |---|---|---|
-| lets through (GO) | 97%, of which 93.1% are right | 83%, of which 93.7% are right |
-| holds back (HOLD) | 3%, of which only 37.8% would have been right | 17%, of which 58.0% would have been right |
+| lets through (GO) | 95%, of which 94.1% are right | 82%, of which 95.4% are right |
+| holds back (HOLD) | 5%, of which only 42.9% would have been right | 18%, of which 62.5% would have been right |
 
 With no thalamic drive (for example, the ears' gate forced shut), it says HOLD instead of naming something.
 
-**Memory (RAG).** The database holds every training example: 237,001 (178,792 pictures, 58,209 sounds). The fitted trust is **0.075**: cortex does most of the work; memory adds 0.1 on Tiny-ImageNet and ImageNet photos and 0.5 on ESC-50 sounds. Its jobs now are the familiarity signal that decides expertise, what you teach it (episodes), and the amygdala's inputs. See finding 7.
+**Memory (RAG).** The database holds every training example: 339,364 (281,155 pictures, 58,209 sounds). The fitted trust is **0.128**: cortex does most of the work; memory adds 0.7 on AudioSet, 0.6 on sketches, 0.3 on FSD50K, 0.2 on CIFAR, ImageNet photos and ImageNet-R, and nothing on Tiny-ImageNet or ESC-50. Its jobs now are the familiarity signal that decides expertise, what you teach it (episodes), and the amygdala's inputs. See finding 7.
 
 ## Findings, including the unflattering ones
 
@@ -170,11 +190,15 @@ With no thalamic drive (for example, the ears' gate forced shut), it says HOLD i
 8. **Sounds: 10 times the names, 7 points lost on ESC-50.** 45,000 clips from AudioSet and FSD50K (one name per clip, AudioSet words mapped onto ESC-50's where they are the same sound) took AudioSet eval from 14.7% to 34.8% and FSD50K eval from 36.9% to 63.4%, and pictures gained 0.5 on validation. ESC-50 fell from 95.2% to 88.2%.
    - The errors are overlapping names, not deafness: crickets -> "insects", pouring water -> "liquid", chirping birds -> "bird vocalization", pig -> "livestock", and washing machine -> "engine" (no new washing-machine clips; hundreds of engines).
    - Logit adjustment for class frequency (Menon et al. 2021) did not fix it: on validation it traded ESC-50 (+2) for the new sounds (-3).
-   - Chosen on validation anyway: pooled 81.6% vs 77.2%, and with each sound set weighted equally 68.4% vs 61.5%. The previous model is kept (`checkpoints/v2b_expertise.pt`) for anyone who only needs ESC-50's 50 sounds.
+   - Chosen on validation anyway: pooled 81.6% vs 77.2%, and with each sound set weighted equally 68.4% vs 61.5%. The previous model (`checkpoints/v2b_expertise.pt`) was kept for a while for anyone who only needed ESC-50's 50 sounds; it was removed in the 2026-10-26 cleanup.
 9. **Leaks found and closed before they counted.** 229 FSD50K clips are cut from the same freesound recordings as ESC-50's validation/test clips (removed by ID), 29 more were near-copies by CLAP similarity (removed), and FSD50K's val/test held recordings ESC-50's training clips came from (removed). ImageNet "twins" of held-out classes (tape player for cassette player, tiger cat for tabby, ...) and ImageNet's computer "mouse" (which the vocabulary filed under the rodent) are not trained on.
 10. **More data has stopped paying much.** Round 5 added the next 8 photos of each ImageNet class (48 -> 56), 12,122 rare-sound clips from AudioSet's unbalanced set, and 16 epochs. Pooled validation rose only 81.6% -> 81.8% (pictures tied, sounds slightly up), so it was deployed by the rule, but the tests go both ways: ImageNet photos +0.6, FSD50K +2.2, Tiny +0.3, against CIFAR -0.3, ESC-50 -1.2, AudioSet -1.4, never-trained -2.1. The best epoch was 5 of 16: training past it only memorised. The frozen networks set the ceiling; disk (D: has ~1.8 GB free) limits further data.
 11. **Regularisation beat more data.** Round 5 kept epoch 5 of 16: past it the model memorised the cached features, which are identical every epoch. Round 6 added label smoothing (0.1) and dropped 10% of each input grid during training. It kept improving to epoch 16, and pooled validation rose 81.8% -> 82.3%, the largest gain of the last three rounds. Every test improved except the never-trained development set (79.0% -> 77.4%).
 12. **A taught memory fired for the whole class, and the checks caught it.** A taught episode fired when an input was 0.80 similar to it. Label smoothing pulls a class together: two different same-class validation pictures cleared 0.80 21% of the time with round 5's cortex and 72% with round 6's (median 0.70 -> 0.88). Teaching one bear "garden gnome" renamed another bear. The bar is now measured per trained model as the 99.5th percentile of same-class, different-item similarity on validation (0.975 for this model), so only the same input or a near-copy matches.
+13. **Drawings were the gap, and training on them closed it.** Round 7 added 22,924 ImageNet-R pictures (art, cartoons, origami, toys, sculpture) and 10,748 ImageNet-Sketch drawings, plus 88 more photos per ImageNet class. ImageNet-R went 78.2% -> 94.2% and sketches 68.1% -> 75.5%. Pooled validation still fell slightly (82.3% -> 82.1%), because round 7 also added VGGSound, so round 7 was not deployed.
+14. **More sound data made every sound test worse.** VGGSound (11,049 YouTube clips mapped onto 185 of our names) took validation sounds 54.6% -> 53.1%, ESC-50 87.5% -> 86.8%, AudioSet 35.2% -> 34.6% and FSD50K 65.8% -> 64.0%. Round 8 is round 7 without it, and ESC-50 rose to 89.5%. More data is not automatically better; this was the second time it was measured (finding 10).
+15. **Half the training beat twice the training.** Round 8's curve: pictures flat from epoch 4 (87.5% -> 87.9%), sounds peaking at epoch 6 (54.7%) then falling to 52.3%, never-trained classes falling throughout. Keeping the best epoch (8 of 16) was not enough: under the one-cycle schedule that epoch was taken at a high learning rate, before the rate wound down. Round 9 trains 8 epochs, so the rate finishes decaying where validation peaks. Every test went up and the cortex trained in 110 minutes instead of 240.
+16. **The one remaining regression: things it has never been taught.** Imagenette went 79.5% (untrained) -> 77.4% (round 6) -> 74.4% -> 75.1% -> 73.3% (round 9). Every round trades some of the frozen networks' general knowledge for the names it practises. The next fix is a loss that keeps frontal's scores near the untrained ones on names absent from training. Choosing its strength needs an open-vocabulary *validation* split of its own, because Imagenette is the test.
 
 ## Data
 
@@ -182,7 +206,10 @@ With no thalamic drive (for example, the ears' gate forced shut), it says HOLD i
 |---|---|---|
 | CIFAR-100 | 45,000 train, 5,000 validation, 10,000 test | |
 | Tiny-ImageNet | 90,000 train (450 per class), 10,000 validation. Its own 10,000-picture validation set is the **test** | `zh-plus/tiny-imagenet`. ImageNet terms: non-commercial research |
-| ImageNet photos | 782 classes not in Tiny or Imagenette: 56 train (48 + 8 more, a split of their own) + 6 validation per class (fetched by row group), and 10 per class from ImageNet's own validation photos as the **test**. No photo appears twice (checked by bytes) | `benjamin-paine/imagenet-1k-256x256`. ImageNet terms |
+| ImageNet photos | 782 classes not in Tiny or Imagenette: 144 train (48 + 8 + 88 more, splits of their own; the 88 lose 125 photos that sat within 0.97 cosine of a val/test photo) + 6 validation per class (fetched by row group), and 10 per class from ImageNet's own validation photos as the **test**. No photo appears twice (checked by bytes) | `benjamin-paine/imagenet-1k-256x256`. ImageNet terms |
+| ImageNet-R | 22,924 train, 6,041 test (198 classes; art, cartoons, origami, toys, sculpture), split by hash; 813 training pictures within 0.93 of a val/test picture dropped | `axiong/imagenet-r` (Hendrycks et al. 2021); research use |
+| ImageNet-Sketch | 10,748 train (15 per class, duplicates removed by checksum), 2,829 test (918 classes), split by hash; 713 near-copies dropped | `songweig/imagenet_sketch` (Wang et al. 2019); research use |
+| VGGSound | 11,049 clips encoded for round 7; **not trained on** since round 8 (`TRAIN_ON_VGGSOUND = False`, finding 14) | `11hu83/vggsound`; CC-BY 4.0 labels, audio from YouTube |
 | ESC-50 | folds 1-3 train, 4 validation, 5 test | CC BY-NC 3.0: non-commercial |
 | AudioSet (balanced) | ~16,000 training clips; 2,000 validation and 4,000 test from its eval segments | `danjacobellis/audioset_opus_24kbps_balanced`; labels CC-BY 4.0, audio from YouTube (research use) |
 | AudioSet (unbalanced, 2 of 96 files) | 12,122 rare-name training clips (names with < 300 clips; no catch-alls; no YouTube id shared with the balanced/eval lists). The files were deleted after encoding | `danjacobellis/audioset_opus_24kbps` |
@@ -210,12 +237,13 @@ With no thalamic drive (for example, the ears' gate forced shut), it says HOLD i
 | `lessons.py`, `LEARN.md` | the teaching material |
 
 Outside `v2b/`:
-- `checkpoints/v2b.pt`: the trained parts, 13 MB.
-- `checkpoints/v2b_memory.npz`: the RAG database, 525 MB, rebuilt by `train`.
+- `checkpoints/v2b.pt`: the trained parts of the deployed model (round 9), 13 MB.
+- `checkpoints/v2b_memory.npz`: its RAG database, 0.86 GB, rebuilt by `train`.
 - `checkpoints/v2b_cortex_best.pt`: the trained cortex with what it was trained on, for `--refit`.
-- `checkpoints/v2b_round5.pt` (+ `v2b_memory_round5.npz`, `v2b_cortex_best_round5.pt`): the previous model. Copy them over `v2b.pt` / `v2b_memory.npz` / `v2b_cortex_best.pt` to roll back.
-- `python -m v2b.train --candidate` trains into `*_candidate` files and never touches the deployed model; promote by renaming.
-- `checkpoints/v2b_expertise.pt` (+ its memory): the model before broad sound training (ESC-50 95.2%, but only 50 sounds).
-- `data/v2b_cache/`: 58 GB, rebuildable. `data/imagenet_subset/`: 0.66 GB of fetched photos.
+- `checkpoints/v2b_round6.pt`, `_round7`, `_round8` (each with its `v2b_memory_roundN.npz` and `v2b_cortex_best_roundN.pt`): earlier rounds, kept so any one can be put back by renaming.
+- `python -m v2b.train --candidate` trains into `*_candidate` files and never touches the deployed model; promote by renaming. `python -m v2b.dashboard --candidate` opens a candidate.
+- None of the checkpoints are in git (`.gitignore`): they are rebuilt by `python -m v2b.train`.
+- `data/v2b_cache/`: 47 GB, every training and test item already run through the frozen networks (grids stored 8-bit). NOT fully rebuildable: the raw AudioSet, FSD50K and VGGSound audio was deleted once encoded, so ~66,000 encoded clips exist only here.
+- `data/imagenet_subset/`: 2.4 GB -- ImageNet photos (train/test/more/more2) and the renditions (imr, sketch), read for display and for re-encoding.
 - `results/v2b_live.jsonl`: the last run, event by event, for the live window.
 - `v2b/memory/`: what you taught it, gitignored.

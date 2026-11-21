@@ -211,7 +211,7 @@ ONTOLOGY_REPO = "agkphysics/AudioSet"
 FSD50K_REPO = "philgzl/fsd50k"   # freesound, CC-BY-4.0 (per-clip CC licences)
 SOUND_SECONDS = 10               # FSD50K clips run to 30 s: the first 10, as AudioSet's
 MORE_AUDIO_SHARE = 40            # new sounds per training batch, beside ESC-50's AUDIO_SHARE
-SOUND_NEAR_COPY = 0.95
+SOUND_NEAR_COPY = 0.95           # CLAP cosine at which a training clip counts as a test clip's copy
 #  RARE SOUNDS (round 5): AudioSet's unbalanced set, only for names with fewer
 #  than SOUND_EXTRA_UPTO training clips. Two of its 96 files: C: had 3.9 GB
 #  free. It cannot help ESC-50's "washing machine" -- AudioSet has no such
@@ -222,7 +222,210 @@ AUDIOSET_EXTRA_FILES = ("data/part_00-00000-of-00001.parquet",
 SOUND_EXTRA_UPTO = 300
 #  Refuse to start below this much free space on the cache drive: it shares
 #  D: with the page file, which grew by GBs under memory pressure (2026-10-05).
-DISK_HEADROOM_GB = 1.5           # CLAP cosine at which a training clip counts as a test clip's copy
+DISK_HEADROOM_GB = 1.5
+#  8-BIT GRIDS (round 7). occ_grid and it_grid (49 places x 1,152 numbers per
+#  picture) were 51.6 of the cache's 59 GB at 16 bits, with D: down to 1.7 GB
+#  -- no room for more diverse data. Stored as int8 with one scale per place
+#  they take half, read back as float32. One scale per place alone read back at
+#  cosine 0.9974: SigLIP's channel 514 reaches 229 in occ_grid (median channel
+#  peak 0.89) and takes the whole 8-bit range. Keeping each split's 16 largest
+#  channels at 16 bits beside the int8 (+2.8%) gives 0.99999 (occ) / 0.9999 (it).
+#  Even the 0.9974 version changed only 0.1% of the deployed model's answers on
+#  validation (84.727% vs 84.719%), so QUANT_MIN_COSINE is a guard, not a tuning.
+#  par_cells (Depth Anything, 49 x 388 per picture, 8.7 GB) joined them for
+#  round 7's renditions: same scheme, worst row 0.99997 on three val splits.
+CACHE_INT8 = True
+QUANTIZED = ("occ_grid", "it_grid", "par_cells")
+QUANT_KEEP = 16
+QUANT_MIN_COSINE = 0.9995
+#  ROUND 7: MORE DIVERSE TRAINING DATA, paid for by the 8-bit grids above.
+#  (1) The next INET_MORE2_PER_CLASS photos of every ImageNet class, after the
+#  48 + 6 + 8 already used: each class goes from 56 training photos to 144.
+INET_MORE2_PER_CLASS = 88
+#  (2) VGGSound (11hu83/vggsound: VGGSound's own test list, 309 labels x ~50
+#  ten-second YouTube clips, CC-BY-4.0 annotations, audio at 16 kHz). Training
+#  only -- validation and every test stay exactly as in round 6, so the two
+#  rounds compare on identical numbers. Clips from a YouTube video that is in
+#  any of our AudioSet splits are left out by id.
+VGGSOUND_REPO = "11hu83/vggsound"
+#  ROUND 8: trained without it. Round 7 with VGGSound: validation sounds 54.59 ->
+#  53.14, ESC-50 87.5 -> 86.75, AudioSet 35.2 -> 34.6, FSD50K 65.8 -> 64.0 -- it
+#  helped no sound test. The encoded split stays in the cache.
+TRAIN_ON_VGGSOUND = False
+VGGSOUND_CACHE = ROOT.parent / "hf_cache"     # D:; C: had 0.7 GB free
+#  VGGSound label -> one v2.B sound name, by hand: a string match found 83 of
+#  309 and sent "cattle, bovinae cowbell" (a cowbell) to "cow". The rules are
+#  one_name()'s: ESC-50's name beats its own subtypes, else the most specific
+#  name AudioSet would give ("duck quacking" is "quack", the child of "duck").
+#  The first draft broke the first rule for 24 labels (fly, giggle, idling,
+#  purr...): round 6 trains buzzing as "insects" (428 AudioSet/FSD50K clips,
+#  0 as "fly"), and 150 VGGSound clips as fly/bee/mosquito would have taught a
+#  rival answer to ESC-50's insects test -- the kind of overlap that already
+#  cost ESC-50 95.2 -> 87.5. Exceptions: "cattle, bovinae cowbell" stays
+#  "cowbell" (a bell, not a cow); "coyote howling" is left out (howl sits under
+#  Dog in AudioSet, and a coyote is not one). A second review found the fold
+#  cuts the other way too: one_name() lets the parent win only when the clip
+#  ALSO carries it, and AudioSet's eval labels 76 of its 4,000 test clips by a
+#  subtype alone (giggle 11, firecracker 11, hiss 11 + 17 in FSD50K, howl 9,
+#  rustling leaves 8, belly laugh 7, growling 7 in FSD50K, purr 6, lawn mower
+#  6). So a label goes when either name would compete with a test: those
+#  subtypes; "cricket chirping" (AudioSet/FSD50K crickets are "insects",
+#  ESC-50's are "crickets"); "people babbling" ("hubbub" is a condition tag
+#  one_name drops); "railroad car, train wagon" (a sibling of Train, not a
+#  subtype); "ocean burbling" (no test clip is "ocean", 40 are "sea waves");
+#  and the songbird-like mynah, magpie and cuckoo under "bird vocalization"
+#  (FSD50K's test holds 63 "chirping birds"). 221 labels, 11,049 clips, 185
+#  names; 37 of ESC-50's 50 classes get clips. Labels with no name of their own (sports,
+#  wild animals AudioSet lacks, "dinosaurs bellowing") are left out rather
+#  than forced onto a catch-all, and so is "playing erhu": its nearest name,
+#  "bowed string instrument", is one of SOUND_BROAD's capped catch-alls.
+VGGSOUND_NAMES = {
+    "air conditioning noise": "air conditioning", "air horn": "air horn",
+    "airplane": "airplane", "airplane flyby": "airplane",
+    "alarm clock ringing": "clock alarm", "ambulance siren": "siren",
+    "baby babbling": "babbling", "baby crying": "crying baby", "baby laughter": "laughing",
+    "baltimore oriole calling": "chirping birds", "barn swallow calling": "chirping birds",
+    "basketball bounce": "basketball bounce", "bathroom ventilation fan running": "mechanical fan",
+    "beat boxing": "beatboxing", "bee, wasp, etc. buzzing": "insects",
+    "bird chirping, tweeting": "chirping birds", "bird squawking": "squawk",
+    "bird wings flapping": "bird flight", "black capped chickadee calling": "chirping birds",
+    "bull bellowing": "cow", "canary calling": "chirping birds", "cap gun shooting": "cap gun",
+    "car engine idling": "engine", "car engine knocking": "engine",
+    "car engine starting": "engine", "car passing by": "car passing by",
+    "cat caterwauling": "cat", "cat growling": "cat",
+    "cat meowing": "cat", "cattle mooing": "cow",
+    "cattle, bovinae cowbell": "cowbell", "chainsawing trees": "chainsaw",
+    "chicken clucking": "hen", "chicken crowing": "rooster", "child singing": "child singing",
+    "child speech, kid speaking": "child speech", "children shouting": "children shouting",
+    "chopping food": "chopping (food)", "chopping wood": "chop",
+    "church bell ringing": "church bells", "civil defense siren": "siren",
+    "cow lowing": "cow",
+    "crow cawing": "crow",
+    "cupboard opening or closing": "cupboard open or close",
+    "cutting hair with electric trimmers": "electric shaver",
+    "disc scratching": "scratching (performance technique)", "dog barking": "dog",
+    "dog baying": "dog", "dog bow-wow": "dog",
+    "dog whimpering": "dog", "door slamming": "slam", "driving buses": "bus",
+    "driving motorcycle": "motorcycle", "duck quacking": "quack",
+    "eagle screaming": "bird vocalization", "eating with cutlery": "cutlery",
+    "electric shaver, electric razor shaving": "electric shaver",
+    "eletric blender running": "blender", "engine accelerating, revving, vroom": "engine",
+    "female singing": "female singing", "female speech, woman speaking": "female speech",
+    "fire crackling": "crackling fire", "fire truck siren": "siren",
+    "fireworks banging": "fireworks", "firing cannon": "artillery fire",
+    "firing muskets": "gunshot", "fly, housefly buzzing": "insects", "foghorn": "foghorn",
+    "footsteps on snow": "footsteps", "francolin calling": "bird vocalization",
+    "frog croaking": "frog", "goat bleating": "goat", "goose honking": "honk",
+    "hair dryer drying": "hair dryer", "hammering nails": "hammer",
+    "heart sounds, heartbeat": "heart sounds", "helicopter": "helicopter",
+    "horse clip-clop": "clip-clop", "horse neighing": "neigh",
+    "ice cream truck, ice cream van": "ice cream truck",
+    "lions growling": "roaring cats (lions",
+    "lions roaring": "roar", "machine gun shooting": "machine gun",
+    "male singing": "male singing",
+    "male speech, man speaking": "male speech", "mosquito buzzing": "insects",
+    "motorboat, speedboat acceleration": "motorboat", "mouse clicking": "mouse click",
+    "mouse pattering": "patter", "mouse squeaking": "mouse",
+    "opening or closing car electric windows": "power windows",
+    "opening or closing drawers": "drawer open or close", "orchestra": "orchestra",
+    "owl hooting": "hoot", "parrot talking": "bird vocalization",
+    "people battle cry": "battle cry",
+    "people burping": "burping", "people cheering": "cheering", "people clapping": "clapping",
+    "people coughing": "coughing", "people crowd": "crowd", "people eating": "chewing",
+    "people eating apple": "chewing", "people eating crisps": "chewing", "people farting": "fart",
+    "people finger snapping": "finger snapping", "people gargling": "gargling",
+    "people hiccup": "hiccup", "people humming": "humming",
+    "people running": "run", "people screaming": "screaming", "people shuffling": "shuffle",
+    "people slapping": "slap", "people slurping": "drinking sipping",
+    "people sneezing": "sneezing", "people sniggering": "laughing", "people sobbing": "crying",
+    "people whispering": "whispering", "people whistling": "whistling",
+    "pheasant crowing": "bird vocalization", "pig oinking": "pig", "pigeon, dove cooing": "coo",
+    "plastic bottle crushing": "crushing", "playing accordion": "accordion",
+    "playing acoustic guitar": "acoustic guitar", "playing bagpipes": "bagpipes",
+    "playing banjo": "banjo", "playing bass drum": "bass drum",
+    "playing bass guitar": "bass guitar", "playing bongo": "drum",
+    "playing bugle": "brass instrument", "playing cello": "cello", "playing clarinet": "clarinet",
+    "playing congas": "drum", "playing cornet": "brass instrument", "playing cymbal": "cymbal",
+    "playing didgeridoo": "didgeridoo", "playing djembe": "drum",
+    "playing double bass": "double bass", "playing drum kit": "drum kit",
+    "playing electric guitar": "electric guitar", "playing electronic organ": "electronic organ",
+    "playing flute": "flute",
+    "playing french horn": "french horn", "playing glockenspiel": "glockenspiel",
+    "playing gong": "gong", "playing hammond organ": "hammond organ",
+    "playing harmonica": "harmonica", "playing harp": "harp", "playing harpsichord": "harpsichord",
+    "playing mandolin": "mandolin", "playing marimba, xylophone": "marimba",
+    "playing piano": "piano", "playing saxophone": "saxophone", "playing shofar": "shofar",
+    "playing sitar": "sitar", "playing snare drum": "snare drum",
+    "playing steel guitar, slide guitar": "steel guitar", "playing steelpan": "steelpan",
+    "playing synthesizer": "synthesizer", "playing tabla": "tabla",
+    "playing tambourine": "tambourine", "playing theremin": "theremin",
+    "playing timbales": "drum", "playing timpani": "timpani", "playing trombone": "trombone",
+    "playing trumpet": "trumpet", "playing tuning fork": "tuning fork",
+    "playing tympani": "timpani", "playing ukulele": "ukulele",
+    "playing vibraphone": "vibraphone", "playing violin, fiddle": "violin",
+    "playing zither": "zither", "police car (siren)": "siren", "printer printing": "printer",
+    "pumping water": "pump (liquid)", "race car, auto racing": "race car",
+    "raining": "rain", "rapping": "rapping",
+    "reversing beeps": "reversing beeps", "ripping paper": "tearing",
+    "rowboat, canoe, kayak rowing": "rowboat", "running electric fan": "mechanical fan",
+    "sailing": "sailboat", "sea waves": "sea waves", "sheep bleating": "sheep",
+    "singing bowl": "singing bowl", "singing choir": "choir", "skateboarding": "skateboard",
+    "skidding": "skidding", "sliding door": "sliding door", "sloshing water": "slosh",
+    "smoke detector beeping": "smoke detector", "snake hissing": "snake",
+    "snake rattling": "rattle", "splashing water": "splash", "spraying water": "spray",
+    "squishing water": "squish", "stream burbling": "stream", "subway, metro, underground": "subway",
+    "tapping guitar": "tapping (guitar technique)",
+    "telephone bell ringing": "telephone bell ringing", "thunder": "thunderstorm",
+    "toilet flushing": "toilet flush", "train horning": "train",
+    "train wheels squealing": "train wheels squealing", "train whistling": "train",
+    "turkey gobbling": "gobble", "typing on computer keyboard": "keyboard typing",
+    "typing on typewriter": "typewriter", "using sewing machines": "sewing machine",
+    "vacuum cleaner cleaning floors": "vacuum cleaner",
+    "vehicle horn, car horn, honking": "car horn", "warbler chirping": "chirping birds",
+    "waterfall burbling": "waterfall", "whale calling": "whale vocalization",
+    "wind chime": "wind chime", "wind noise": "wind",
+    "wood thrush calling": "chirping birds", "writing on blackboard with chalk": "writing",
+    "yodelling": "yodeling",
+}
+#  (3) RENDITIONS: every picture so far was a photo. ImageNet-R (axiong/
+#  imagenet-r, MIT: 30,000 pictures of 200 ImageNet classes as art, cartoons,
+#  deviantart, graffiti, embroidery, graphics, origami, paintings, patterns,
+#  plastic objects, plush, sculptures, sketches, tattoos, toys and video games)
+#  and ImageNet-Sketch (songweig/imagenet_sketch: ~50 pencil sketches of each
+#  of the 1,000 classes; SKETCH_PER_CLASS of them, read member by member from
+#  the 7.6 GB zip over HTTP). Stored at 256 px (shorter side, centre crop) in
+#  data/imagenet_subset as imr.parquet / sketch.parquet, so they are read
+#  like the ImageNet photos ("inet-imr:<row>"). Imagenette's 10 classes and
+#  INET_SKIP stay out, as for the photos; Tiny-ImageNet's 200 do NOT -- a
+#  painting of a goldfish is not one of Tiny's test photos.
+TRAIN_ON_RENDITIONS = True
+IMR_REPO = "axiong/imagenet-r"
+SKETCH_REPO = "songweig/imagenet_sketch"
+SKETCH_PER_CLASS = 15
+#  Each rendition's row hashes into test (REND_TEST_SHARE) or train. There is
+#  no rendition validation: selection stays on round 6's validation set, so
+#  the rounds compare on identical numbers. The new tests are measured for
+#  the deployed round-6 model too (results/v2b_round7_baseline.json).
+REND_TEST_SHARE = 0.2
+#  A NEW training picture (renditions, and the round-7 ImageNet photos) whose
+#  SigLIP identity is this close to any validation or test picture's is
+#  dropped. ImageNet holds the same photo under two classes (9 of the more2
+#  photos are byte-identical to inet_test photos, 6 to inet_val, each under a
+#  DIFFERENT label), and ImageNet-R the same artwork more than once. Measured
+#  on inet_train vs inet_test: 555 pairs >= 0.95 (504 of them just same-class
+#  lookalikes), 36 >= 0.97, 4 >= 0.99 -- exactly the byte-identical ones. 0.97
+#  catches resized or recropped copies without stripping lookalikes.
+IMAGE_NEAR_COPY = 0.97
+#  Renditions need a lower bar. ImageNet-R and ImageNet-Sketch also hold
+#  MIRRORED copies, often re-cropped or watermarked too; encoding each test
+#  picture mirrored as well (identity_flip) moved those from 0.965-0.97 to
+#  >= 0.99, but contact sheets of the nearest train/test pairs still showed
+#  copies down to 0.93 (half the sketch pairs at 0.95-0.96, a few at
+#  0.93-0.95: a bee eater, a torch, "hen" vs "cock", "agaric" vs "bolete").
+#  At 0.93 the filter drops 813 of 23,737 ImageNet-R and 713 of 11,461 sketch
+#  training pictures; the same bar on the round-7 photos would drop 6,374
+#  same-class lookalikes, so they keep IMAGE_NEAR_COPY (125 dropped).
+REND_NEAR_COPY = 0.93
 TRAIN_ON_MORE_SOUNDS = True
 SOUND_CAP = 600                  # training clips per name: no name drowns the rest
 SOUND_BROAD_CAP = 300            # ...and fewer for catch-alls (music, speech, ...)
@@ -267,7 +470,14 @@ AUDIO_SHARE = 8
 #  extra epochs cannot make the result worse.
 #  16 (round 5): in both 12-epoch runs the best epoch was the last or one
 #  before it, so validation had not clearly stopped rising.
-EPOCHS = 16
+#  8 (round 9). Round 8 kept epoch 8 of 16 and its curve says why: pictures
+#  flat from epoch 4 (87.5, 87.7, 87.6, 87.8, 87.9 ... 87.9), sounds peaking at
+#  54.7 (epoch 6) then sliding to 52.3, never-trained classes at full
+#  correction falling all the way (76.3 -> 47.4 at epoch 8 -> 41.3). Keeping
+#  the best epoch does not make the extra epochs free: under OneCycle the kept
+#  epoch 8 was taken at high learning rate, never annealed. 8 epochs lets the
+#  rate finish decaying where validation peaks, in half the time.
+EPOCHS = 8
 #  REGULARISATION (round 6). Round 5 kept epoch 5 of 16: past it the training
 #  loss fell to 0.08 while validation stayed flat -- memorising the cached
 #  features, which are identical every epoch. Label smoothing stops the
@@ -306,6 +516,10 @@ KEEP_TOLERANCE = 3.0
 #  validation (88.23) but cost the never-trained classes 2.8 points.
 EXPERTISE = True
 MEMORY_EPOCHS = 4
+#  Leave-one-out training builds (queries x bank) similarities: 512 x 237,001
+#  in round 6, when the 6 GB card already spilled into shared memory once.
+#  Round 7's bank is ~350,000, so the query batch shrinks to keep that size.
+MEMORY_SIM_BUDGET = 512 * 237_001
 VALUE_EPOCHS = 200
 ENCODE_BATCH = 48               # So400m returns 28 layers of activations per image
 

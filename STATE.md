@@ -55,7 +55,7 @@ expertise                 cautious keep 0.25 answers; a stored (familiar) answer
 taught episodes           fire at >= 0.975 similarity (measured per model: q99.5 of
                           same-class, different-item similarity); 0.80 renamed a whole class
 trade-off, chosen on val  ESC-50 -7 points for +20 / +27 on the broad sound tests;
-                          previous model kept at checkpoints/v2b_expertise.pt
+                          (that ESC-50-only model was removed in the 2026-10-26 cleanup)
 CIFAR-only on Tiny-ImageNet  33.0%, BELOW zero-shot 56.8% (see v2b/README.md finding 5)
 amygdala                  answers 97% of images at 93.1%; holds back 3% that are 37.8% right
 v2.B checks               42 pass, 0 fail
@@ -70,6 +70,39 @@ python -m v2b.diagnose          # error breakdown per test set
 python -m v2b.monitor           # the live window on its own
 python -m v2b.lessons 1         # ...7
 ```
+
+**Round 7 (2026-10-26) -- trained, NOT promoted.** More diverse data: 88 more
+photos per ImageNet class (68,691 after copies), 33,672 renditions (ImageNet-R art,
+cartoons, origami, toys...; ImageNet-Sketch), 9,075 VGGSound clips -- 281,155
+pictures, 348,439 memories. The cache went int8 to make room (occ/it/par grids,
+16 outlier channels kept at fp16; deployed model re-scored on it: CIFAR 89.01 vs
+89.02, ImageNet 81.48 vs 81.51, sounds identical). Validation and every round-6 test
+unchanged. Training copies of any val/test picture were dropped, mirrored ones too
+(ImageNet-R/Sketch hold left-right flipped copies at cosine 0.965-0.97; renditions
+use a 0.93 bar, read off contact sheets).
+
+```
+                     round 6   round 7 (candidate)
+pooled validation     82.28     82.09   <- lower: not promoted (rule: choose on validation)
+  val images/sounds   88.03/54.59  88.07/53.14 (cortex, best epoch)
+CIFAR-100             91.24     90.82
+Tiny-ImageNet         87.88     87.80
+ImageNet photos       84.40     86.10
+ImageNet-R (6,041)    78.20*    94.22   (* round 6 cortex; untrained 68.6)
+ImageNet-Sketch(2,829) 68.12*   75.54   (* round 6 cortex; untrained 61.4)
+ESC-50                87.50     86.75
+AudioSet              35.23     34.55
+FSD50K                65.78     64.00
+never-trained (dev)   77.35     74.40
+```
+
+Renditions +16 / +7 and ImageNet photos +1.7 are what the new data paid for;
+VGGSound did not help any sound test (validation sounds -1.45) and the
+never-trained dev set fell 3 points. Candidate: `checkpoints/v2b_candidate.pt` +
+`v2b_memory_candidate.npz`, record `results/v2b_train_candidate.json`, round-6
+baseline on the new tests `results/v2b_round7_baseline.json`. Try it with
+`python -m v2b.dashboard --candidate`. Promoting it is a judgement call (diversity
+vs the pre-registered rule), left to the user.
 
 `checkpoints/v2b.pt` and `checkpoints/v2b_memory.npz` are what the dashboard loads;
 the checkpoint refuses to load into different networks. `data/v2b_cache/` (58 GB)
@@ -298,3 +331,52 @@ Published write-ups of this project, in increasing depth:
 - *Four Lobes, Twelve Steps* — v2 explained end to end
 
 Ask the user for the links; they are private artifacts on claude.ai.
+
+### v2.B round 8 -- superseded by round 9 (2026-10-30)
+
+Round 7 minus VGGSound (`TRAIN_ON_VGGSOUND = False`). 281,155 pictures, 339,364
+memories, kept epoch 8 of 16. Promoted on validation: 82.39 vs round 6 82.28.
+42/42 checks pass. Round 6 kept as `checkpoints/*_round6*`, round 7 as `*_round7*`.
+
+| test | round 6 | round 8 |
+|---|---|---|
+| CIFAR-100 | 91.2 | 90.7 |
+| Tiny-ImageNet | 87.9 | 88.0 |
+| ImageNet photos | 84.4 | 86.2 |
+| ImageNet-R | 78.2 (cortex) | 93.9 |
+| ImageNet-Sketch | 68.1 (cortex) | 75.3 |
+| ESC-50 | 87.5 | 89.5 |
+| AudioSet | 35.2 | 34.3 |
+| FSD50K | 65.8 | 65.1 |
+| open vocabulary | 77.35 | 75.1 |
+
+Worse on CIFAR, AudioSet, FSD50K and never-trained classes; the art/sketch gain
+is the big one.
+
+### v2.B round 9 -- DEPLOYED (2026-11-02)
+
+Round 8's data, EPOCHS 16 -> 8 (round 8's curve: pictures flat from epoch 4,
+sounds peaking at epoch 6, never-trained falling throughout; its kept epoch 8
+was taken at high OneCycle learning rate). 110 min of cortex instead of 240.
+Kept epoch 8 of 8 -- the annealed end. Validation 82.75 vs round 8 82.39.
+Correction keep 0.30 (was 0.25), familiar keep 0.75 (was 0.6). 42/42 checks.
+Round 8 kept as `checkpoints/*_round8*`.
+
+| test | round 6 | round 8 | round 9 |
+|---|---|---|---|
+| CIFAR-100 | 91.2 | 90.7 | 91.4 |
+| Tiny-ImageNet | 87.9 | 88.0 | 88.4 |
+| ImageNet photos | 84.4 | 86.2 | 86.4 |
+| ImageNet-R | 78.2 (cortex) | 93.9 | 94.7 |
+| ImageNet-Sketch | 68.1 (cortex) | 75.3 | 75.5 |
+| ESC-50 | 87.5 | 89.5 | 89.5 |
+| AudioSet | 35.2 | 34.3 | 35.9 |
+| FSD50K | 65.8 | 65.1 | 65.9 |
+| open vocabulary | 77.35 | 75.1 | 73.3 |
+
+Every test is at or above round 6 except open vocabulary, which fell again
+(untrained 79.5). That is the one remaining regression: training trades
+never-trained names for trained ones. Next candidate fix: a loss keeping
+frontal's scores near the untrained ones on names absent from training --
+but it needs an open-vocabulary VALIDATION split to be chosen on, since
+Imagenette is the test.

@@ -33,3 +33,6 @@ v2b/memory/
 checkpoints/*.npz
 # v2.B live training log: rewritten by every run, read by v2b.monitor
 results/*.jsonl
+
+# Empty stderr captures from detached training runs.
+*.err

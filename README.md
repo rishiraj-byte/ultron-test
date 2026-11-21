@@ -1,13 +1,82 @@
 # Brain-Inspired AI
 
-Four cortical lobes as four real, separate PyTorch networks, routed by a
-central thalamus, gated by a basal ganglia. Runs as a native desktop app.
-No browser.
+An AI built the way a brain is wired instead of as one big network. Each brain
+region is its own real network, sitting where the anatomy puts it, and every
+connection between regions is a named, cuttable tract with its own delay. So
+you can watch a picture or a sound travel through it, see which region did
+what, and cut any connection to measure what it was worth.
 
-`PROJECT.md` is the design document and the authority on *why* anything is
-shaped the way it is. This file is how to run it.
+## The original idea
+
+Map the brain's lobes onto separate PyTorch networks and route between them
+the way the brain does:
+
+- a **thalamus** as the relay every sense passes through, not a fixed pipeline;
+- **occipital** for sight, **temporal** for sound and meaning, **parietal**
+  for space, fed by occipital and never by the thalamus (the "where" stream);
+- **frontal** to fuse what the others send and decide;
+- a **basal ganglia** to allow or suppress that decision, sending its output
+  back to the thalamus, never straight to the answer.
+
+It runs as a native desktop app (no browser) that shows every region live.
+The first use case was deliberately small: see an image, extract features,
+"think", give an identification. `PROJECT.md` is the original design document
+and the authority on *why* anything is shaped the way it is.
+
+## Four builds
+
+| | v1 | v2 | v3 | **v2.B** |
+|---|---|---|---|---|
+| Folder | top level | top level | `v3/` | `v2b/` |
+| Run it | `python desktop_app.py` | `python desktop_app_v2.py` | `python -m v3.dashboard` | `python -m v2b.dashboard` |
+| Signals | float vectors | float vectors | binary spikes | float vectors |
+| Learning | backprop | backprop | local plasticity only, no gradient anywhere | frozen open-weight networks + a 3.3M trained circuit |
+| Senses | image, text, audio, grid navigation | text, image, audio, video, sensor | image, as Poisson spike trains | image, sound, video |
+| Status | superseded | trained, working | runs, **does not learn** | **trained, deployed (round 9)** |
+| Checks | 82 | 115 | 27 | 42 |
+
+- **v1** is the original idea as first built: four lobes, thalamus, basal
+  ganglia, frozen ResNet / MiniLM / Whisper encoders. Everything below this
+  section documents v1.
+- **v2** adds corticothalamic feedback, the thalamic reticular nucleus and
+  un-pooled encoder taps. Image 59.3% (chance 1%), text 66.0% (chance 5%).
+- **v3** asks whether the same wiring can learn with spikes and local rules
+  alone, with no backprop. It runs, but it does not learn: a negative result,
+  reported as one.
+- **v2.B** places large frozen networks by anatomy: SigLIP 2 as occipital and
+  the ventral stream, Depth Anything V2 as parietal, LAION CLAP as temporal
+  with an arcuate path to frontal, and SigLIP 2's text side as frontal with
+  1,629 names. Between them sits a small trained circuit (thalamic gates,
+  dorsal stream, STS, POT, a 3-pass frontal loop), a **hippocampus** that does
+  retrieval-augmented recognition over 339,364 stored memories with a
+  familiarity gate, and an **amygdala** that decides GO (answer) or HOLD ("not
+  sure -- maybe X"). There is no language model. Round 9 test results:
+
+  | Test | v2.B |
+  |---|---|
+  | CIFAR-100 | 91.4% |
+  | Tiny-ImageNet | 88.4% |
+  | ImageNet photos (782 classes) | 86.4% |
+  | ImageNet-R (art, cartoons, toys) | 94.7% |
+  | ImageNet-Sketch | 75.5% |
+  | ESC-50 sounds | 89.5% |
+  | AudioSet eval | 35.9% |
+  | FSD50K eval | 65.9% |
+  | Never-trained classes | 73.3% (the untrained networks: 79.5%) |
+
+  Full detail, every finding including the unflattering ones, and the data:
+  [`v2b/README.md`](v2b/README.md). Round-by-round history: `STATE.md`.
+  `test_pics/` holds 24 freely licensed pictures to try it on (credits in
+  `test_pics/CREDITS.md`).
+
+Each build lives on its own terms: v3 and v2.B import nothing from the others
+and change nothing outside their own folders. The trained weights and the
+encoded-feature caches are not in git; each build's training command rebuilds
+them.
 
 ---
+
+# v1
 
 ## Quick start
 

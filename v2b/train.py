@@ -51,6 +51,7 @@ SPLITS = ("train", "val", "test")
 IMAGE_SPLITS = SPLITS + ("extra",)          # CIFAR slices
 TINY_SPLITS = ("tiny_train", "tiny_val", "tiny_test")   # Tiny-ImageNet slices
 INET_SPLITS = ("inet_train", "inet_val", "inet_test")   # ImageNet photos
+REND_SPLITS = ("imr_train", "imr_test", "sketch_train", "sketch_test")   # renditions
 SOUND_SPLITS = ("snd_train", "snd_val", "snd_atest", "snd_ftest")   # AudioSet + FSD50K
 LIVE = C.ROOT / "results" / "v2b_live.jsonl"
 _last_emit = [0.0]
@@ -124,6 +125,19 @@ def _round5_ready() -> None:
     if (C.TRAIN_ON_MORE_SOUNDS and C.AUDIOSET_EXTRA_FILES and not data.have_extra_sounds()
             and not _path("aud_rare_train.labels.npy").exists()):
         raise SystemExit("AUDIOSET_EXTRA_FILES are set but not downloaded -- fetch them or set ()")
+    if C.TRAIN_ON_INET and C.INET_MORE2_PER_CLASS and not data.have_inet_more2():
+        fetching = any((C.INET_DIR / "parts").glob("more2-*")) if (C.INET_DIR / "parts").exists() else False
+        raise SystemExit("INET_MORE2_PER_CLASS is set but data/imagenet_subset/more2.parquet is %s "
+                         "-- finish data.fetch_imagenet(more=\"more2\") or set it to 0"
+                         % ("still being fetched" if fetching else "missing"))
+    if (C.TRAIN_ON_RENDITIONS and not data.have_renditions()
+            and not all(_path("img_%s.labels.npy" % p).exists() for p in REND_SPLITS)):
+        raise SystemExit("TRAIN_ON_RENDITIONS is set but imr.parquet / sketch.parquet are not "
+                         "fetched -- run data.fetch_renditions() or set it to False")
+    if (C.TRAIN_ON_MORE_SOUNDS and C.VGGSOUND_NAMES and not data.have_vggsound()
+            and not _path("aud_vgg_train.labels.npy").exists()):
+        raise SystemExit("VGGSOUND_NAMES is set but VGGSound is not fetched -- run "
+                         "data.fetch_vggsound() or set it to {}")
     free = shutil.disk_usage(C.CACHE_DIR).free / 1e9
     if free < C.DISK_HEADROOM_GB:
         raise SystemExit("only %.1f GB free on the cache drive; need %.1f GB of headroom"
@@ -157,6 +171,24 @@ def _complete() -> bool:
         need.append(("aud", "rare_train"))
         if listed.get("rare_stamp") != data.extra_sounds_stamp():
             return False
+    if C.INET_MORE2_PER_CLASS and data.have_inet_more2():
+        need.append(("img", "inet_more2"))
+        if listed.get("inet_more2_stamp") != data.inet_more2_stamp():
+            return False
+    if C.VGGSOUND_NAMES and data.have_vggsound():
+        need.append(("aud", "vgg_train"))
+        if listed.get("vgg_stamp") != data.vggsound_stamp(_audioset_videos(listed)):
+            return False
+    if C.TRAIN_ON_RENDITIONS and data.have_renditions():
+        stamp = data.renditions_stamp()
+        for part in REND_SPLITS:
+            need.append(("img", part))
+            if listed.get("stamp_img_%s" % part) != stamp:
+                return False
+        for part in ("imr_test", "sketch_test"):
+            if (listed.get("flip_img_%s" % part) != stamp
+                    or not _path("img_%s.identity_flip.npy" % part).exists()):
+                return False
     if data.have_imagenette():
         need.append(("img", "open"))
     return all(_path("%s_%s.labels.npy" % (k, p)).exists() for k, p in need)
@@ -173,12 +205,23 @@ def encode(fresh: bool = False) -> dict:
         if all(manifest.get(k) == v for k, v in wanted.items()):
             if _complete():
                 print("cache matches the configured networks (%s)" % C.CACHE_DIR)
+                compress_cache()        # a float16 grid an interrupted run left
                 return manifest
             keep = True                 # same networks: only encode what is missing
             print("cache matches; encoding the splits it is missing")
         else:
             print("cache was built for other networks -- re-encoding")
     if not keep:
+        #  The raw AudioSet / FSD50K / unbalanced-AudioSet files were deleted
+        #  once encoded (C: had no room); wiping would lose ~57,000 encoded
+        #  clips for good.
+        gone = [name for name, have in (("aud_snd_train", data.have_more_sounds()),
+                                        ("aud_rare_train", data.have_extra_sounds()),
+                                        ("aud_vgg_train", data.have_vggsound()))
+                if _path("%s.labels.npy" % name).exists() and not have]
+        if gone:
+            raise SystemExit("re-encoding everything would delete %s, whose source audio is no "
+                             "longer on disk -- fetch it again first" % ", ".join(gone))
         for old in C.CACHE_DIR.glob("*.npy"):
             old.unlink()
     sources = (json.loads(_path("sources.json").read_text())
@@ -194,7 +237,7 @@ def encode(fresh: bool = False) -> dict:
             continue
         images, labels, src = data.cifar(part)
         n = len(labels)
-        out = {k: _memmap("img_%s.%s" % (part, k), s, n, "w+") for k, s in image_fields.items()}
+        out = _image_out(part, n, image_fields)
         for start in range(0, n, C.ENCODE_BATCH):
             chunk = torch.from_numpy(images[start:start + C.ENCODE_BATCH]).to(brain.device)
             seen = brain.see(senses.retina(chunk))
@@ -205,8 +248,7 @@ def encode(fresh: bool = False) -> dict:
             emit({"stage": "encode", "split": "CIFAR " + part, "done": start + len(chunk),
                   "total": n}, every=1.0)
         print()
-        for array in out.values():
-            array.flush()
+        _settle(out)
         _memmap("img_%s.labels" % part, (), n, "w+")[:] = labels
         sources["img_%s" % part] = src
 
@@ -218,8 +260,7 @@ def encode(fresh: bool = False) -> dict:
                 continue
             _, labels, src = data.tiny_imagenet(part.split("_")[1], decode=False)
             n = len(labels)
-            out = {k: _memmap("img_%s.%s" % (part, k), s_, n, "w+")
-                   for k, s_ in image_fields.items()}
+            out = _image_out(part, n, image_fields)
             for start in range(0, n, C.ENCODE_BATCH):
                 pixels = data.tiny_pixels(src[start:start + C.ENCODE_BATCH])
                 chunk = torch.from_numpy(pixels).to(brain.device)
@@ -231,8 +272,7 @@ def encode(fresh: bool = False) -> dict:
                 emit({"stage": "encode", "split": part.replace("_", " "),
                       "done": start + len(chunk), "total": n}, every=1.0)
             print()
-            for array in out.values():
-                array.flush()
+            _settle(out)
             _memmap("img_%s.labels" % part, (), n, "w+")[:] = labels
             sources["img_%s" % part] = src
             _save_sources(sources)
@@ -250,8 +290,7 @@ def encode(fresh: bool = False) -> dict:
                 continue
             labels, src = data.imagenet_photos(part.split("_")[1])
             n = len(labels)
-            out = {k: _memmap("img_%s.%s" % (part, k), s_, n, "w+")
-                   for k, s_ in image_fields.items()}
+            out = _image_out(part, n, image_fields)
             for start in range(0, n, C.ENCODE_BATCH):
                 pixels = data.inet_pixels(src[start:start + C.ENCODE_BATCH])
                 chunk = torch.from_numpy(pixels).to(brain.device)
@@ -263,8 +302,7 @@ def encode(fresh: bool = False) -> dict:
                 emit({"stage": "encode", "split": part.replace("_", " "),
                       "done": start + len(chunk), "total": n}, every=1.0)
             print()
-            for array in out.values():
-                array.flush()
+            _settle(out)
             _memmap("img_%s.labels" % part, (), n, "w+")[:] = labels
             sources["img_%s" % part] = src
             _save_sources(sources)
@@ -275,13 +313,12 @@ def encode(fresh: bool = False) -> dict:
     if data.have_imagenette() and not (keep and _path("img_open.labels.npy").exists()):
         pictures, labels, src = data.imagenette()
         n = len(labels)
-        out = {k: _memmap("img_open.%s" % k, s, n, "w+") for k, s in image_fields.items()}
+        out = _image_out("open", n, image_fields)
         for start in range(0, n, C.ENCODE_BATCH):
             seen = brain.see(senses.retina(pictures[start:start + C.ENCODE_BATCH]))
             for key in image_fields:
                 out[key][start:start + C.ENCODE_BATCH] = seen[key].cpu().numpy()
-        for array in out.values():
-            array.flush()
+        _settle(out)
         _memmap("img_open.labels", (), n, "w+")[:] = labels
         sources["img_open"] = src
         print("  open-vocabulary pictures: %d" % n)
@@ -342,7 +379,7 @@ def encode(fresh: bool = False) -> dict:
         if sources.get("inet_more_stamp") != stamp or not _path("img_inet_more.labels.npy").exists():
             labels, src = data.imagenet_photos("more")
             n = len(labels)
-            out = {k: _memmap("img_inet_more.%s" % k, s_, n, "w+") for k, s_ in image_fields.items()}
+            out = _image_out("inet_more", n, image_fields)
             for start in range(0, n, C.ENCODE_BATCH):
                 pixels = data.inet_pixels(src[start:start + C.ENCODE_BATCH])
                 seen = brain.see(senses.retina(torch.from_numpy(pixels).to(brain.device)))
@@ -353,8 +390,7 @@ def encode(fresh: bool = False) -> dict:
                 emit({"stage": "encode", "split": "inet more", "done": start + len(pixels),
                       "total": n}, every=1.0)
             print()
-            for array in out.values():
-                array.flush()
+            _settle(out)
             _memmap("img_inet_more.labels", (), n, "w+")[:] = labels
             sources["img_inet_more"], sources["inet_more_stamp"] = src, stamp
             _save_sources(sources)
@@ -379,6 +415,105 @@ def encode(fresh: bool = False) -> dict:
             sources["aud_rare_train"], sources["rare_stamp"] = src, stamp
             _save_sources(sources)
 
+    #  ROUND 7: the next 88 photos of every ImageNet class, written straight to
+    #  int8, and VGGSound's clips for names v2.B already has.
+    if C.INET_MORE2_PER_CLASS and data.have_inet_more2():
+        stamp = data.inet_more2_stamp()
+        if sources.get("inet_more2_stamp") != stamp or not _path("img_inet_more2.labels.npy").exists():
+            labels, src = data.imagenet_photos("more2")
+            n = len(labels)
+            out = _image_out("inet_more2", n, image_fields)
+            for start in range(0, n, C.ENCODE_BATCH):
+                pixels = data.inet_pixels(src[start:start + C.ENCODE_BATCH])
+                seen = brain.see(senses.retina(torch.from_numpy(pixels).to(brain.device)))
+                for key in image_fields:
+                    out[key][start:start + len(pixels)] = seen[key].cpu().numpy()
+                print("\r  images inet_more2  %d/%d  %.0fs" % (start + len(pixels), n,
+                                                            time.time() - started), end="", flush=True)
+                emit({"stage": "encode", "split": "inet more2", "done": start + len(pixels),
+                      "total": n}, every=1.0)
+            print()
+            _settle(out)
+            _memmap("img_inet_more2.labels", (), n, "w+")[:] = labels
+            sources["img_inet_more2"], sources["inet_more2_stamp"] = src, stamp
+            _save_sources(sources)
+            data._INET.clear()          # ~1.8 GB of photos
+    if C.VGGSOUND_NAMES and data.have_vggsound():
+        videos = _audioset_videos(sources)
+        stamp = data.vggsound_stamp(videos)
+        if sources.get("vgg_stamp") != stamp or not _path("aud_vgg_train.labels.npy").exists():
+            labels, src = data.vggsound(videos)
+            n = len(labels)
+            out = {k: _memmap("aud_vgg_train.%s" % k, s_, n, "w+") for k, s_ in audio_fields.items()}
+            for start in range(0, n, 16):
+                heard = brain.hear(data.more_waves(src[start:start + 16]))
+                for key in audio_fields:
+                    out[key][start:start + 16] = heard[key].cpu().numpy()
+                print("\r  sounds vgg_train   %d/%d  %.0fs" % (min(start + 16, n), n,
+                                                            time.time() - started), end="", flush=True)
+                emit({"stage": "encode", "split": "vggsound", "done": min(start + 16, n),
+                      "total": n}, every=1.0)
+            print()
+            for array in out.values():
+                array.flush()
+            _memmap("aud_vgg_train.labels", (), n, "w+")[:] = labels
+            sources["aud_vgg_train"], sources["vgg_stamp"] = src, stamp
+            _save_sources(sources)
+
+    #  RENDITIONS: art, toys, origami, sketches... of ImageNet's classes. One
+    #  stamp per split, so an interrupted run resumes where it stopped.
+    if C.TRAIN_ON_RENDITIONS and data.have_renditions():
+        stamp = data.renditions_stamp()
+        for part in REND_SPLITS:
+            if (sources.get("stamp_img_%s" % part) == stamp
+                    and _path("img_%s.labels.npy" % part).exists()):
+                continue
+            labels, src = data.renditions(*part.split("_"))
+            n = len(labels)
+            out = _image_out(part, n, image_fields)
+            for start in range(0, n, C.ENCODE_BATCH):
+                pixels = data.inet_pixels(src[start:start + C.ENCODE_BATCH])
+                seen = brain.see(senses.retina(torch.from_numpy(pixels).to(brain.device)))
+                for key in image_fields:
+                    out[key][start:start + len(pixels)] = seen[key].cpu().numpy()
+                print("\r  images %-12s %d/%d  %.0fs" % (part, start + len(pixels), n,
+                                                          time.time() - started), end="", flush=True)
+                emit({"stage": "encode", "split": part.replace("_", " "),
+                      "done": start + len(pixels), "total": n}, every=1.0)
+            print()
+            _settle(out)
+            _memmap("img_%s.labels" % part, (), n, "w+")[:] = labels
+            sources["img_%s" % part], sources["stamp_img_%s" % part] = src, stamp
+            _save_sources(sources)
+        data._INET.clear()
+
+    #  MIRRORED COPIES: ImageNet-R and ImageNet-Sketch hold left-right flipped
+    #  copies of one picture (a broom, a liner, one frog filed as "bullfrog" in
+    #  one copy and "tailed frog" in the other), at identity cosine 0.965-0.970
+    #  -- under IMAGE_NEAR_COPY, so they passed as different pictures. Each
+    #  rendition TEST picture is also seen mirrored (identity only), and every
+    #  copy check in train() compares against both.
+    if C.TRAIN_ON_RENDITIONS and data.have_renditions():
+        for part in ("imr_test", "sketch_test"):
+            stamp = sources.get("stamp_img_%s" % part)
+            if (sources.get("flip_img_%s" % part) == stamp
+                    and _path("img_%s.identity_flip.npy" % part).exists()):
+                continue
+            src = sources["img_%s" % part]
+            n = len(src)
+            flip = _memmap("img_%s.identity_flip" % part, image_fields["identity"], n, "w+")
+            for start in range(0, n, C.ENCODE_BATCH):
+                pixels = np.ascontiguousarray(data.inet_pixels(src[start:start + C.ENCODE_BATCH])[:, :, ::-1])
+                seen = brain.see(senses.retina(torch.from_numpy(pixels).to(brain.device)))
+                flip[start:start + len(pixels)] = seen["identity"].cpu().numpy()
+                print("\r  mirrored %-12s %d/%d" % (part, start + len(pixels), n), end="", flush=True)
+            print()
+            flip.flush()
+            del flip
+            sources["flip_img_%s" % part] = stamp
+            _save_sources(sources)
+        data._INET.clear()
+
     names, kinds = data.vocabulary()
     np.save(_path("words.npy"), brain.frontal.words.cpu().numpy())
     np.save(_path("lexicon.npy"), brain.cortex.lexicon.cpu().numpy())
@@ -387,6 +522,7 @@ def encode(fresh: bool = False) -> dict:
                     names=names, kinds=kinds, minutes=round((time.time() - started) / 60, 2))
     _save_sources(sources)
     manifest_path.write_text(json.dumps(manifest, indent=1))
+    compress_cache()                    # anything a crash left at float16
     del brain
     data._INET.clear()                  # ~0.6 GB of photos not needed while training
     data._TINY.clear()
@@ -394,17 +530,251 @@ def encode(fresh: bool = False) -> dict:
     return manifest
 
 
+class _Q8:
+    """An int8 grid with one scale per (item, place), read back as float32, with
+    the split's few outlier channels kept at 16 bits beside it. Indexing returns
+    floats, so every reader of Cache.arrays works unchanged."""
+
+    def __init__(self, q, scale, keep, kept):
+        self.q, self.scale, self.keep, self.kept = q, scale, np.asarray(keep), kept
+        self.shape, self.dtype = q.shape, np.dtype(np.float32)
+
+    def __len__(self) -> int:
+        return len(self.q)
+
+    def __getitem__(self, index):
+        x = (np.asarray(self.q[index], np.float32)
+             * (np.asarray(self.scale[index], np.float32)[..., None] / 127.0))
+        x[..., self.keep] = np.asarray(self.kept[index], np.float32)
+        return x
+
+
+def _quantize(x: np.ndarray, keep: np.ndarray) -> tuple:
+    """float (n, places, width) -> int8 values and a float16 scale per place, with
+    the `keep` channels taken out first and returned as float16."""
+    kept = x[..., keep].astype(np.float16)
+    x = x.copy()
+    x[..., keep] = 0.0
+    scale = np.abs(x).max(-1)
+    q = np.rint(x / np.maximum(scale, 1e-8)[..., None] * 127.0).clip(-127, 127).astype(np.int8)
+    return q, scale.astype(np.float16), kept
+
+
+def compress_split(name: str, log=print) -> bool:
+    """img_<part>.<grid>.npy (float16) -> .q8 / .scale / .keep / .kept .npy, then
+    the float16 file is deleted -- only after a sample reads back at cosine
+    >= C.QUANT_MIN_COSINE. Returns False (everything left as it was) if the disk
+    is too full."""
+    import os
+    import shutil
+    src_path = _path(name + ".npy")
+    if not src_path.exists():
+        return True
+    src = np.load(src_path, mmap_mode="r")
+    if src.dtype != np.float16:
+        return True
+    n, places, width = src.shape
+    need = src.size + n * places * (2 + 2 * C.QUANT_KEEP) + 3e8
+    if shutil.disk_usage(C.CACHE_DIR).free < need:
+        log("  not enough disk yet to compress %s (%.1f GB needed)" % (name, need / 1e9))
+        return False
+    rng = np.random.default_rng(0)
+    probe = np.sort(rng.choice(n, min(512, n), replace=False))
+    peak = np.abs(np.asarray(src[probe], np.float32)).reshape(-1, width).max(0)
+    keep = np.sort(np.argsort(peak)[::-1][:C.QUANT_KEEP])
+    files = {part: _path("%s.%s.tmp.npy" % (name, part)) for part in ("q8", "scale", "kept")}
+    q = np.lib.format.open_memmap(files["q8"], mode="w+", dtype=np.int8, shape=src.shape)
+    s = np.lib.format.open_memmap(files["scale"], mode="w+", dtype=np.float16, shape=(n, places))
+    k = np.lib.format.open_memmap(files["kept"], mode="w+", dtype=np.float16,
+                                  shape=(n, places, len(keep)))
+    for start in range(0, n, 1024):
+        q[start:start + 1024], s[start:start + 1024], k[start:start + 1024] = _quantize(
+            np.asarray(src[start:start + 1024], np.float32), keep)
+    q.flush()
+    s.flush()
+    k.flush()
+    rows = np.sort(rng.choice(n, min(256, n), replace=False))
+    a = np.asarray(src[rows], np.float32).reshape(len(rows), -1)
+    b = _Q8(q, s, keep, k)[rows].reshape(len(rows), -1)
+    cos = (a * b).sum(-1) / np.maximum(np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1), 1e-12)
+    del q, s, k, src
+    if cos.min() < C.QUANT_MIN_COSINE:
+        for f in files.values():
+            f.unlink()
+        raise SystemExit("compressing %s read back at cosine %.5f -- left as float16"
+                         % (name, cos.min()))
+    np.save(_path(name + ".keep.npy"), keep)
+    for part in ("scale", "kept", "q8"):    # q8 last: Cache reads int8 once it exists
+        os.replace(files[part], _path("%s.%s.npy" % (name, part)))
+    src_path.unlink()
+    log("  compressed %s (min cosine %.6f)" % (name, cos.min()))
+    return True
+
+
+def compress_cache(log=print) -> None:
+    """Every float16 picture grid, smallest first: each one frees room for the next."""
+    if not C.CACHE_INT8:
+        return
+    todo = sorted((p for k in C.QUANTIZED for p in C.CACHE_DIR.glob("img_*.%s.npy" % k)),
+                  key=lambda p: p.stat().st_size)
+    for _ in range(2):                       # a second sweep picks up what lacked room
+        for p in todo:
+            compress_split(p.name[:-len(".npy")], log)
+
+
+def _audioset_videos(sources: dict) -> set:
+    """The YouTube ids behind every AudioSet clip in the cache (each id ends
+    in one). VGGSound is YouTube too: a clip from one of these videos could be
+    the very sound an AudioSet test clip was cut from."""
+    return {x.rsplit(":", 1)[1] for key in ("aud_snd_train", "aud_snd_val", "aud_snd_atest",
+                                             "aud_snd_ftest", "aud_rare_train")
+            for x in sources.get(key, ()) if x.startswith(("aset:", "asetu:"))}
+
+
+def _shared_keep(field: str):
+    """The QUANT_KEEP outlier channels most compressed splits agree on, or None.
+    They are SigLIP's own (514, 875 and 1009 lead in every split; 14 of 16
+    occ_grid channels are shared by all 12), so a NEW split written straight to
+    int8 can use them before it has a sample of its own."""
+    import collections
+    votes = collections.Counter()
+    for path in C.CACHE_DIR.glob("img_*.%s.keep.npy" % field):
+        votes.update(np.load(path).tolist())
+    if not votes:
+        return None
+    return np.sort(np.asarray(sorted(votes, key=lambda c: (-votes[c], c))[:C.QUANT_KEEP]))
+
+
+class _Q8Writer:
+    """A new split's grid written straight to int8 (+ scale + kept channels),
+    every batch checked against QUANT_MIN_COSINE. At float16 first, round 7's
+    69k photos would need 15.6 GB before compress_split could halve them --
+    more than D: had once they and VGGSound were fetched."""
+
+    def __init__(self, name: str, shape: tuple, keep: np.ndarray):
+        self.name, self.keep = name, keep
+        self.files = {part: _path("%s.%s.tmp.npy" % (name, part)) for part in ("q8", "scale", "kept")}
+        self.q = np.lib.format.open_memmap(self.files["q8"], mode="w+", dtype=np.int8, shape=shape)
+        self.s = np.lib.format.open_memmap(self.files["scale"], mode="w+", dtype=np.float16,
+                                           shape=shape[:2])
+        self.k = np.lib.format.open_memmap(self.files["kept"], mode="w+", dtype=np.float16,
+                                           shape=shape[:2] + (len(keep),))
+
+    def __setitem__(self, index, x) -> None:
+        x = np.asarray(x, np.float32)
+        q, scale, kept = _quantize(x, self.keep)
+        back = q.astype(np.float32) * (scale.astype(np.float32)[..., None] / 127.0)
+        back[..., self.keep] = kept.astype(np.float32)
+        a, b = x.reshape(len(x), -1), back.reshape(len(x), -1)
+        cos = (a * b).sum(-1) / np.maximum(np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1),
+                                           1e-12)
+        if cos.min() < C.QUANT_MIN_COSINE:
+            raise SystemExit("%s: a batch quantised at cosine %.5f" % (self.name, cos.min()))
+        self.q[index], self.s[index], self.k[index] = q, scale, kept
+
+    def flush(self) -> None:
+        """Close and rename into place, q8 last: Cache reads int8 once it exists."""
+        import os
+        self.q.flush()
+        self.s.flush()
+        self.k.flush()
+        del self.q, self.s, self.k           # Windows will not rename a mapped file
+        np.save(_path(self.name + ".keep.npy"), self.keep)
+        for part in ("scale", "kept", "q8"):
+            os.replace(self.files[part], _path("%s.%s.npy" % (self.name, part)))
+
+
+def _image_out(part: str, n: int, image_fields: dict) -> dict:
+    """Output arrays for a NEW picture split: its grids straight to int8 when
+    the cache is int8, everything else as _memmap writes it."""
+    out = {}
+    for k, shape in image_fields.items():
+        keep = _shared_keep(k) if C.CACHE_INT8 and k in C.QUANTIZED else None
+        stem = "img_%s.%s" % (part, k)
+        if keep is not None:
+            if _path(stem + ".npy").exists():
+                _path(stem + ".npy").unlink()       # compress_cache would put it back over ours
+            out[k] = _Q8Writer(stem, (n,) + tuple(shape), keep)
+            continue
+        for old in ("q8", "scale", "keep", "kept"):      # Cache would prefer a stale int8
+            if _path("%s.%s.npy" % (stem, old)).exists():
+                _path("%s.%s.npy" % (stem, old)).unlink()
+        out[k] = _memmap(stem, shape, n, "w+")
+    return out
+
+
+def _identities(cache) -> list:
+    """A split's SigLIP identities, plus their mirrored twins where encoded."""
+    found = [cache.arrays["identity"]]
+    flip = _path("%s.identity_flip.npy" % getattr(cache, "stem", ""))
+    if flip.exists():
+        found.append(np.load(flip, mmap_mode="r"))
+    return found
+
+
+def _round6_pictures(dims) -> list:
+    """The picture splits round 6 trained on -- and so stored in its memory."""
+    parts = ["train"] + (["extra"] if C.TRAIN_ON_EXTRA else []) + ["tiny_train", "inet_train",
+                                                                    "inet_more"]
+    return [Cache("img", p, dims) for p in parts if _path("img_%s.labels.npy" % p).exists()]
+
+
+def rendition_tests(dims, device, rend: dict | None = None) -> tuple[dict, dict]:
+    """imr_test / sketch_test minus every picture whose SigLIP identity (or its
+    mirror's) is >= REND_NEAR_COPY like a picture round 6 trained on: ImageNet scraped
+    drawings, toys and paintings too, and either round's memory would recall
+    such a copy. The round-6 baseline uses this same function, so both models
+    are scored on identical rows."""
+    rend = rend or {p: Cache("img", p, dims) for p in ("imr_test", "sketch_test")}
+    stored = [c.arrays["identity"] for c in _round6_pictures(dims)]
+    out, dropped = {}, {}
+    with torch.no_grad():
+        for key in ("imr", "sketch"):
+            test = rend["%s_test" % key]
+            best = torch.full((len(test),), -1.0, device=device)
+            for seen in _identities(test):                     # the picture, and mirrored
+                q = F.normalize(torch.from_numpy(np.asarray(seen, np.float32)).to(device), dim=-1)
+                for ident in stored:
+                    for start in range(0, len(ident), 32768):
+                        k = F.normalize(torch.from_numpy(np.asarray(ident[start:start + 32768],
+                                                                    np.float32)).to(device), dim=-1)
+                        for s in range(0, len(q), 2048):       # 2,048 x 32,768: 0.27 GB
+                            best[s:s + 2048] = torch.maximum(best[s:s + 2048],
+                                                             (q[s:s + 2048] @ k.T).max(-1).values)
+            rows = np.flatnonzero(best.cpu().numpy() < C.REND_NEAR_COPY)
+            out[key], dropped[key] = Subset(test, rows), len(test) - len(rows)
+    torch.cuda.empty_cache()
+    return out, dropped
+
+
+def _settle(out: dict) -> None:
+    """A finished picture split: flush, let go of every mapping (Windows will
+    not rename or delete a mapped file -- WinError 32), then compress whatever
+    of it is still float16. Per split, so --fresh never holds every grid at
+    float16 at once: ~63 GB for round 6 alone, more than D: has."""
+    for key in list(out):
+        out.pop(key).flush()
+    compress_cache()
+
+
 class Cache:
     """One split of cached lobe output, read in batches."""
 
     def __init__(self, kind: str, part: str, dims: Dims):
         self.image = kind == "img"
+        self.stem = "%s_%s" % (kind, part)
         self.dims = dims
         image_fields, audio_fields = _fields(dims)
         self.fields = image_fields if self.image else audio_fields
         self.labels = np.load(_path("%s_%s.labels.npy" % (kind, part)))
-        self.arrays = {k: np.load(_path("%s_%s.%s.npy" % (kind, part, k)), mmap_mode="r")
-                       for k in self.fields}
+        self.arrays = {}
+        for k in self.fields:
+            stem = "%s_%s.%s" % (kind, part, k)
+            if _path(stem + ".q8.npy").exists():
+                self.arrays[k] = _Q8(*(np.load(_path("%s.%s.npy" % (stem, part)), mmap_mode="r")
+                                       for part in ("q8", "scale", "keep", "kept")))
+            else:
+                self.arrays[k] = np.load(_path(stem + ".npy"), mmap_mode="r")
         self.sources = json.loads(_path("sources.json").read_text())["%s_%s" % (kind, part)]
 
     def __len__(self) -> int:
@@ -623,10 +993,11 @@ def train_memory(entorhinal, ca1, bank, bank_labels, vocab, device):
     optimiser = torch.optim.AdamW(params, lr=1e-3, weight_decay=1e-4)
     rng = np.random.default_rng(C.SEED)
     n = len(bank)
+    rows = max(64, min(512, C.MEMORY_SIM_BUDGET // n))
     for epoch in range(C.MEMORY_EPOCHS):
         order, running, steps = rng.permutation(n), 0.0, 0
-        for start in range(0, n, 512):
-            idx = torch.from_numpy(order[start:start + 512]).to(device)
+        for start in range(0, n, rows):
+            idx = torch.from_numpy(order[start:start + rows]).to(device)
             keys = entorhinal(bank)                       # N,K: gradient into every key
             sim = keys[idx] @ keys.T
             sim = sim.index_put((torch.arange(len(idx), device=device), idx),
@@ -687,6 +1058,8 @@ def _fingerprint(manifest: dict, caches: dict, cut: tuple) -> dict:
     return {"models": manifest["models"], "dims": manifest["dims"],
             "vocabulary": len(manifest["names"]), "inet_stamp": listed.get("inet_stamp"),
             "snd_stamp": listed.get("snd_stamp"),
+            "round7": [listed.get("inet_more2_stamp"), listed.get("vgg_stamp"),
+                       [listed.get("stamp_img_%s" % p) for p in REND_SPLITS]],
             "train_on": [C.TRAIN_ON_EXTRA, C.TRAIN_ON_TINY, C.TRAIN_ON_INET],
             "train_images": len(caches[("img", "train")]),
             "train_sounds": len(caches[("aud", "train")]), "cut": sorted(cut)}
@@ -719,10 +1092,59 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
         raise SystemExit("the extra ImageNet photos are fetched but not encoded -- run encode first")
     if inet_more is not None:
         print("  more ImageNet photos: %d" % len(inet_more))
+    inet_more2 = (Cache("img", "inet_more2", dims)
+                  if learn_inet and C.INET_MORE2_PER_CLASS
+                  and _path("img_inet_more2.labels.npy").exists() else None)
+    if learn_inet and C.INET_MORE2_PER_CLASS and data.have_inet_more2() and inet_more2 is None:
+        raise SystemExit("the round-7 ImageNet photos are fetched but not encoded -- run encode first")
+    if inet_more2 is not None:
+        print("  round-7 ImageNet photos: %d" % len(inet_more2))
+    rend = ({p: Cache("img", p, dims) for p in REND_SPLITS}
+            if all(_path("img_%s.labels.npy" % p).exists() for p in REND_SPLITS) else {})
+    if C.TRAIN_ON_RENDITIONS and data.have_renditions() and not rend:
+        raise SystemExit("the renditions are fetched but not encoded -- run encode first")
+    rend_train, rend_dropped, more2_dropped = [], 0, 0
+    learn_rend = C.TRAIN_ON_RENDITIONS and bool(rend)
+    if inet_more2 is not None or learn_rend:
+        #  LEAK BACKSTOP for pictures: a NEW training picture whose SigLIP
+        #  identity is >= IMAGE_NEAR_COPY like any validation or test picture's
+        #  is dropped -- ImageNet's cross-class duplicates, ImageNet-R's
+        #  repeated artwork. Round 6's training splits are left as they were.
+        held = [caches[("img", "val")], caches[("img", "test")], tiny.get("tiny_val"),
+                tiny.get("tiny_test"), inet.get("inet_val"), inet.get("inet_test")]
+        if learn_rend:
+            held += [rend["imr_test"], rend["sketch_test"]]
+        if _path("img_open.labels.npy").exists():
+            held.append(Cache("img", "open", dims))
+        held_img = F.normalize(torch.cat([torch.from_numpy(np.asarray(a, np.float32))
+                                          for t in held if t is not None
+                                          for a in _identities(t)]).to(device), dim=-1)
+
+        def unlike_image_tests(cache, bar):
+            ident, rows = cache.arrays["identity"], []
+            for start in range(0, len(cache), 1024):      # 1,024 x ~58,000 held: 0.24 GB
+                chunk = torch.from_numpy(np.asarray(ident[start:start + 1024], np.float32)).to(device)
+                close = (F.normalize(chunk, dim=-1) @ held_img.T).max(-1).values.cpu().numpy()
+                rows.extend((start + np.flatnonzero(close < bar)).tolist())
+            return Subset(cache, rows), len(cache) - len(rows)
+
+        if inet_more2 is not None:
+            inet_more2, more2_dropped = unlike_image_tests(inet_more2, C.IMAGE_NEAR_COPY)
+            print("  round-7 ImageNet photos: %d kept (%d copies of a val/test picture dropped)"
+                  % (len(inet_more2), more2_dropped))
+        if learn_rend:
+            for part in ("imr_train", "sketch_train"):
+                kept, dropped = unlike_image_tests(rend[part], C.REND_NEAR_COPY)
+                rend_train.append(kept)
+                rend_dropped += dropped
+                print("  renditions %s: %d training pictures (%d copies of a val/test picture "
+                      "dropped)" % (part, len(kept), dropped))
+        del held_img
+        torch.cuda.empty_cache()
     caches[("img", "train")] = Joined([caches[("img", "train")], extra,
                                        tiny.get("tiny_train") if learn_tiny else None,
                                        inet.get("inet_train") if learn_inet else None,
-                                       inet_more])
+                                       inet_more, inet_more2] + rend_train)
     caches[("img", "val")] = Joined([caches[("img", "val")],
                                      tiny.get("tiny_val") if learn_tiny else None,
                                      inet.get("inet_val") if learn_inet else None])
@@ -741,17 +1163,24 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
     held = torch.cat([torch.from_numpy(np.asarray(caches[("aud", p)].arrays["aud_joint"],
                                                   np.float32)) for p in ("val", "test")])
     held = F.normalize(held.to(device), dim=-1)
+    #  VGGSound is YouTube, like AudioSet: its clips are also checked against
+    #  every AudioSet and FSD50K validation and test clip.
+    every_held = (F.normalize(torch.cat([held.cpu()] + [
+        torch.from_numpy(np.asarray(sound[p].arrays["aud_joint"], np.float32))
+        for p in ("snd_val", "snd_atest", "snd_ftest")]).to(device), dim=-1)
+        if sound else held)
 
-    def unlike_tests(cache):
+    def unlike_tests(cache, against=None):
+        against = held if against is None else against
         joint = cache.arrays["aud_joint"]
         rows = []
         for start in range(0, len(cache), 4096):
             chunk = torch.from_numpy(np.asarray(joint[start:start + 4096], np.float32)).to(device)
-            close = (F.normalize(chunk, dim=-1) @ held.T).max(-1).values.cpu().numpy()
+            close = (F.normalize(chunk, dim=-1) @ against.T).max(-1).values.cpu().numpy()
             rows.extend((start + np.flatnonzero(close < C.SOUND_NEAR_COPY)).tolist())
         return Subset(cache, rows), len(cache) - len(rows)
 
-    more_train, near_copies, rare_count = None, 0, 0
+    more_train, near_copies, rare_count, vgg_count, vgg_dropped = None, 0, 0, 0, 0
     if learn_sound:
         more_train, near_copies = unlike_tests(sound["snd_train"])
         print("  more sounds: %d training clips (%d near-copies of ESC-50 val/test dropped)"
@@ -764,6 +1193,14 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
             print("  rare sounds: %d training clips (%d near-copies dropped)" % (len(rare), dropped))
         elif C.AUDIOSET_EXTRA_FILES and data.have_extra_sounds():
             raise SystemExit("rare sounds are downloaded but not encoded -- run encode first")
+        if C.TRAIN_ON_VGGSOUND and C.VGGSOUND_NAMES and _path("aud_vgg_train.labels.npy").exists():
+            vgg, vgg_dropped = unlike_tests(Cache("aud", "vgg_train", dims), every_held)
+            vgg_count = len(vgg)
+            more_train = Joined([more_train, vgg])
+            print("  VGGSound: %d training clips (%d near-copies of a val/test clip dropped)"
+                  % (vgg_count, vgg_dropped))
+        elif C.TRAIN_ON_VGGSOUND and C.VGGSOUND_NAMES and data.have_vggsound():
+            raise SystemExit("VGGSound is fetched but not encoded -- run encode first")
     esc_train = caches[("aud", "train")]
     if more_train is not None:
         caches[("aud", "train")] = Joined([esc_train, more_train])
@@ -794,6 +1231,12 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
         untrained["tiny"] = run(cortex, tiny_test, words, device, keep_logits=False)[2][-1]
     if inet_test is not None:
         untrained["inet"] = run(cortex, inet_test, words, device, keep_logits=False)[2][-1]
+    rend_tests, rend_test_dropped = rendition_tests(dims, device, rend) if learn_rend else ({}, {})
+    for key, n in rend_test_dropped.items():
+        print("  %s test: %d pictures (%d copies of a round-6 training picture left out)"
+              % (key, len(rend_tests[key]), n))
+    for key, cache in rend_tests.items():
+        untrained[key] = run(cortex, cache, words, device, keep_logits=False)[2][-1]
     for key, part in (("aset", "snd_atest"), ("fsd", "snd_ftest")):
         if part in sound:
             untrained[key] = run(cortex, sound[part], words, device, keep_logits=False)[2][-1]
@@ -888,6 +1331,8 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
         outs[("img", "tiny_test")] = run(cortex, tiny_test, words, device)
     if inet_test is not None:
         outs[("img", "inet_test")] = run(cortex, inet_test, words, device)
+    for key, cache in rend_tests.items():
+        outs[("img", "%s_test" % key)] = run(cortex, cache, words, device)
     for part in ("snd_atest", "snd_ftest"):
         if part in sound:
             outs[("aud", part)] = run(cortex, sound[part], words, device)
@@ -915,22 +1360,24 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
 
     def recall_all(vectors):
         """_recall in 1,024-query chunks (topk is per row: identical results)."""
+        rows = max(64, min(1024, 2 * C.MEMORY_SIM_BUDGET // len(bank)))
         with torch.no_grad():
             logp, closest = [], []
-            for start in range(0, len(vectors), 1024):
+            for start in range(0, len(vectors), rows):
                 lp, cl = _recall(entorhinal, ca1, bank, bank_labels,
-                                 vectors[start:start + 1024].to(device), vocab)
+                                 vectors[start:start + rows].to(device), vocab)
                 logp.append(lp)
                 closest.append(cl)
             return torch.cat(logp), torch.cat(closest)
 
     def memory_of(part, store, store_labels):
+        rows = max(64, min(1024, 2 * C.MEMORY_SIM_BUDGET // len(store)))
         with torch.no_grad():
             logp, closest = [], []
             vectors = both(part, 1).to(device)
-            for start in range(0, len(vectors), 1024):
+            for start in range(0, len(vectors), rows):
                 lp, cl = _recall(entorhinal, ca1, store, store_labels,
-                                 vectors[start:start + 1024], vocab)
+                                 vectors[start:start + rows], vocab)
                 logp.append(lp)
                 closest.append(cl)
             return torch.cat(logp), torch.cat(closest)
@@ -1085,6 +1532,11 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
                                pictures=len(inet_test),
                                classes=int(len(np.unique(inet_test.labels))))
 
+    for key, cache in rend_tests.items():
+        r_logits, r_vectors, _, r_labels = outs[("img", "%s_test" % key)]
+        results[key] = dict(measure(r_logits, r_vectors, r_labels, cache), pictures=len(cache),
+                            classes=int(len(np.unique(cache.labels))))
+
     for key, part in (("aset", "snd_atest"), ("fsd", "snd_ftest")):
         if part in sound:
             s_logits, s_vectors, _, s_labels = outs[("aud", part)]
@@ -1118,9 +1570,16 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
                       "amygdala": sum(p.numel() for p in amygdala.parameters())},
         "untrained": {"image": untrained["img"], "audio": untrained["aud"],
                       "tiny": untrained.get("tiny"), "inet": untrained.get("inet"),
-                      "aset": untrained.get("aset"), "fsd": untrained.get("fsd")},
+                      "aset": untrained.get("aset"), "fsd": untrained.get("fsd"),
+                      "imr": untrained.get("imr"), "sketch": untrained.get("sketch")},
+        "rendition_pictures": sum(len(r) for r in rend_train),
+        "rendition_near_copies_dropped": rend_dropped,
+        "rendition_test_copies_dropped": rend_test_dropped,
         "sound_near_copies_dropped": near_copies, "rare_sounds": rare_count,
         "inet_more_photos": len(inet_more) if inet_more is not None else 0,
+        "inet_more2_photos": len(inet_more2) if inet_more2 is not None else 0,
+        "inet_more2_copies_dropped": more2_dropped,
+        "vgg_sounds": vgg_count, "vgg_near_copies_dropped": vgg_dropped,
         "best_epoch": best_epoch["epoch"], "epoch_curve": epoch_curve,
         "test": results, "trust": trust, "sharpness": float(ca1.sharpness.detach()),
         "memory_growth": growth, "open_vocabulary": open_result,
@@ -1141,9 +1600,10 @@ def train(epochs: int = C.EPOCHS, cut: tuple = (), refit: bool = False,
                           % (len(caches[("img", "train")]), len(caches[("img", "val")]),
                              len(caches[("img", "test")]), len(tiny_test) if tiny_test else 0,
                              len(inet_test) if inet_test else 0),
-                 "audio": "%s + AudioSet + FSD50K: %d train, %d val; tests: ESC-50 %d, "
+                 "audio": "%s + AudioSet + FSD50K%s: %d train, %d val; tests: ESC-50 %d, "
                           "AudioSet %d, FSD50K %d"
-                          % (manifest["audio"], len(caches[("aud", "train")]),
+                          % (manifest["audio"], " + VGGSound" if vgg_count else "",
+                             len(caches[("aud", "train")]),
                              len(caches[("aud", "val")]), len(caches[("aud", "test")]),
                              len(sound.get("snd_atest", [])), len(sound.get("snd_ftest", [])))},
     }
@@ -1228,6 +1688,13 @@ def report(record: dict) -> None:
         print("  imagenet photos (%d, %d classes)  untrained %.1f%%  cortex %.1f%%  memory %.1f%%  "
               "final %.1f%%" % (t["pictures"], t["classes"], record["untrained"].get("inet") or 0,
                                 t["cortex"], t["memory"], t["fused"]))
+    for key, title in (("imr", "imagenet-r renditions"), ("sketch", "imagenet-sketch")):
+        if key in record["test"]:
+            t = record["test"][key]
+            print("  %s (%d, %d classes)  untrained %.1f%%  cortex %.1f%%  memory %.1f%%  "
+                  "final %.1f%%" % (title, t["pictures"], t["classes"],
+                                    record["untrained"].get(key) or 0, t["cortex"], t["memory"],
+                                    t["fused"]))
     for key, title in (("aset", "audioset eval"), ("fsd", "fsd50k eval")):
         if key in record["test"]:
             t = record["test"][key]

@@ -86,10 +86,15 @@ KIND_COLOUR = {"frozen": C.UI_COOL, "trained": C.UI_ACCENT, "memory": C.UI_GOOD,
 # ---------------------------------------------------------------------------
 
 
+#  --candidate: the model a training run wrote beside the deployed one, so the
+#  two can be tried on the same pictures before one is promoted.
+WHICH = {"checkpoint": C.CHECKPOINT, "bank": C.MEMORY_BANK}
+
+
 class Engine:
     def __init__(self):
         from v2b.brain import BrainV2B
-        self.brain = BrainV2B()
+        self.brain = BrainV2B(checkpoint=WHICH["checkpoint"], bank=WHICH["bank"])
         self.lock = threading.Lock()
         self.watch = None            # (label, module) whose input/output to capture
         self.saved: dict = {}        # tensor name -> original values, while edited
@@ -293,7 +298,8 @@ class Console:
         self._rag_animating = False
         self._thumbs: dict = {}
 
-        root.title("brain-ai  //  v2.B")
+        root.title("brain-ai  //  v2.B%s" % ("  //  CANDIDATE (%s)" % WHICH["checkpoint"].name
+                                              if WHICH["checkpoint"] != C.CHECKPOINT else ""))
         root.configure(bg=C.UI_BG)
         #  Fit the screen: at 820 px tall the feedback row sat behind the
         #  Windows taskbar on a 768 px display.
@@ -1602,7 +1608,12 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--snapshot", help="screenshot every view to <name>_<view>.png, then exit")
+    parser.add_argument("--candidate", action="store_true",
+                        help="load checkpoints/v2b_candidate.pt (+ its memory) instead of v2b.pt")
     args = parser.parse_args()
+    if args.candidate:
+        WHICH["checkpoint"] = C.CHECKPOINT.with_name("v2b_candidate.pt")
+        WHICH["bank"] = C.MEMORY_BANK.with_name("v2b_memory_candidate.npz")
     if args.selftest:
         return selftest()
     import tkinter as tk

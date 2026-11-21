@@ -228,7 +228,7 @@ def _inet_excluded() -> set:
             | set(IMAGENETTE.values()) | set(C.INET_SKIP))
 
 
-def fetch_imagenet(log=print, more: bool = False) -> None:
+def fetch_imagenet(log=print, more: bool | str = False) -> None:
     """Fetch the first photos of each wanted class, row group by row group.
 
     The shards are sorted by class (shard 0 holds classes 0-24, ~1,300
@@ -246,13 +246,16 @@ def fetch_imagenet(log=print, more: bool = False) -> None:
               "test": C.INET_TEST_PER_CLASS}
     #  more=True: the NEXT photos of each class, after the ones already
     #  fetched (the shards are sorted, so "first N" is deterministic).
+    #  more="more2" (round 7): the next ones after those.
     passed = {"more": C.INET_TRAIN_PER_CLASS + C.INET_VAL_PER_CLASS}
+    passed["more2"] = passed["more"] + C.INET_MORE_PER_CLASS
+    extra = "more2" if more == "more2" else "more"
     if more:
-        wanted = {"more": C.INET_MORE_PER_CLASS}
+        wanted = {extra: {"more": C.INET_MORE_PER_CLASS, "more2": C.INET_MORE2_PER_CLASS}[extra]}
     files = [s.rfilename for s in HfApi().dataset_info(C.INET_REPO).siblings]
     fs = HfFileSystem()
     C.INET_DIR.mkdir(parents=True, exist_ok=True)
-    plan = (("more", "train"),) if more else (("train", "train"), ("test", "validation"))
+    plan = ((extra, "train"),) if more else (("train", "train"), ("test", "validation"))
     for ours, theirs in plan:
         out = C.INET_DIR / ("%s.parquet" % ours)
         if out.exists():
@@ -312,9 +315,12 @@ def fetch_imagenet(log=print, more: bool = False) -> None:
         #  aside and renamed, so an existing file always means a complete one.
         pq.write_table(table, out.with_suffix(".tmp"), row_group_size=256)
         os.replace(out.with_suffix(".tmp"), out)
-        if ours == "train" and (C.INET_DIR / "more.parquet").exists():
-            #  "more" passed over THIS file's photos; a new one invalidates it.
-            (C.INET_DIR / "more.parquet").unlink()
+        #  "more" passed over THIS file's photos, and "more2" over both: a new
+        #  one invalidates what comes after it.
+        later = {"train": ("more", "more2"), "more": ("more2",)}.get(ours, ())
+        for after in later:
+            if (C.INET_DIR / ("%s.parquet" % after)).exists():
+                (C.INET_DIR / ("%s.parquet" % after)).unlink()
         for f in done:
             f.unlink()
         log("  %s: %d photos of %d classes -> %s"
@@ -346,7 +352,7 @@ def imagenet_photos(part: str, seed: int = C.SEED):
     INET_VAL_PER_CLASS); test is ImageNet's own validation photos.
     """
     names, inet = image_vocabulary(), imagenet_names()
-    split = {"test": "test", "more": "more"}.get(part, "train")
+    split = {"test": "test", "more": "more", "more2": "more2"}.get(part, "train")
     labels = _inet_table(split).column("label").to_numpy()
     rng = np.random.default_rng(seed)
     keep = []
@@ -377,6 +383,225 @@ def inet_more_stamp() -> str:
              str(path.stat().st_size if path.exists() else "missing"),
              str((C.INET_DIR / "train.parquet").stat().st_size
                  if (C.INET_DIR / "train.parquet").exists() else "missing")]
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+def have_inet_more2() -> bool:
+    return (C.INET_DIR / "more2.parquet").exists()
+
+
+def inet_more2_stamp() -> str:
+    import hashlib
+    parts = [inet_more_stamp(), str(C.INET_MORE2_PER_CLASS)]
+    for split in ("more", "more2"):
+        path = C.INET_DIR / ("%s.parquet" % split)
+        parts.append(str(path.stat().st_size if path.exists() else "missing"))
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Renditions (round 7): ImageNet classes as art, toys, origami, sketches...
+# ---------------------------------------------------------------------------
+
+
+def imagenet_wnids() -> list[str]:
+    """ImageNet's 1,000 WordNet ids in class-index order (sorted). ImageNet-R
+    labels by wnid; the list ships in ImageNet-Sketch's classes.py."""
+    import json
+    import re
+    path = C.INET_DIR / "wnids.json"
+    if not path.exists():
+        from huggingface_hub import hf_hub_download
+        source = hf_hub_download(C.SKETCH_REPO, "classes.py", repo_type="dataset",
+                                 cache_dir=str(C.VGGSOUND_CACHE))
+        wnids = re.findall(r'"(n\d{8})"', Path(source).read_text(encoding="utf-8"))
+        assert len(wnids) == 1000 and wnids == sorted(wnids), len(wnids)
+        C.INET_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(wnids))
+    return json.loads(path.read_text())
+
+
+def _rendition_excluded() -> set:
+    """As _inet_excluded(), but Tiny-ImageNet's classes stay in: its test
+    pictures are photos, and these are not."""
+    names = image_vocabulary()
+    return ({i for i, n in enumerate(imagenet_names()) if n not in names}
+            | set(IMAGENETTE.values()) | set(C.INET_SKIP))
+
+
+def _square256(data: bytes) -> bytes:
+    """Shorter side to 256, centre crop, JPEG q90: renditions come at every
+    size and shape (sketches up to 400 KB), and _inet_decode would squash a
+    non-square one instead of cropping it."""
+    import io
+    from PIL import Image
+    image = Image.open(io.BytesIO(data))
+    image.draft("RGB", (256, 256))            # JPEG: decode 20-35 MP inputs at reduced scale
+    image = image.convert("RGB")
+    w, h = image.size
+    k = 256 / min(w, h)
+    image = image.resize((max(256, round(w * k)), max(256, round(h * k))), Image.BICUBIC)
+    w, h = image.size
+    image = image.crop(((w - 256) // 2, (h - 256) // 2, (w - 256) // 2 + 256, (h - 256) // 2 + 256))
+    out = io.BytesIO()
+    image.save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
+def _write_parts(parts: list, out: Path) -> int:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    table = pa.concat_tables([pq.read_table(f) for f in parts])
+    pq.write_table(table, out.with_suffix(".tmp"), row_group_size=256)
+    os.replace(out.with_suffix(".tmp"), out)
+    for f in parts:
+        f.unlink()
+    return table.num_rows
+
+
+def _save_part(images: list, labels: list, saved: Path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    table = pa.table({"image": pa.array(images, pa.binary()), "label": pa.array(labels, pa.int64())})
+    pq.write_table(table, saved.with_suffix(".tmp"))
+    os.replace(saved.with_suffix(".tmp"), saved)
+
+
+def fetch_renditions(log=print, workers: int = 4) -> None:
+    """imr.parquet and sketch.parquet in INET_DIR. Resumable: every block of
+    10 ImageNet-R row groups (~1,000 pictures) or 25 sketch classes is saved as
+    soon as it is read. The first version saved once per 430 MB shard with all
+    five in flight; a MemoryError 6 minutes in (the machine was at its commit
+    limit) lost everything. A picture that will not decode is skipped."""
+    import zipfile
+    from concurrent.futures import ThreadPoolExecutor
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfApi, HfFileSystem
+    fs = HfFileSystem()
+    index = {w: i for i, w in enumerate(imagenet_wnids())}
+    skip = _rendition_excluded()
+    parts = C.INET_DIR / "parts"
+    parts.mkdir(parents=True, exist_ok=True)
+
+    if not (C.INET_DIR / "imr.parquet").exists():
+        shards = sorted(f.rfilename for f in HfApi().dataset_info(C.IMR_REPO).siblings
+                        if f.rfilename.endswith(".parquet"))
+
+        def shard(name):
+            stem = name.split("/")[-1].rsplit(".", 1)[0]
+            done = []
+            with fs.open("datasets/%s/%s" % (C.IMR_REPO, name), "rb", block_size=2 ** 22) as handle:
+                f = pq.ParquetFile(handle)
+                for g0 in range(0, f.num_row_groups, 10):
+                    saved = parts / ("imr-%s-g%02d.parquet" % (stem, g0))
+                    done.append(saved)
+                    if saved.exists():
+                        continue
+                    images, labels, bad = [], [], 0
+                    for g in range(g0, min(g0 + 10, f.num_row_groups)):
+                        rows = f.read_row_group(g, columns=["image", "wnid"])
+                        for cell, wnid in zip(rows.column("image").to_pylist(),
+                                              rows.column("wnid").to_pylist()):
+                            if index[wnid] in skip:
+                                continue
+                            try:
+                                images.append(_square256(cell["bytes"]))
+                            except Exception:                         # noqa: BLE001
+                                bad += 1
+                                continue
+                            labels.append(index[wnid])
+                    _save_part(images, labels, saved)
+                    log("  imagenet-r: %s groups %d-%d -- %d pictures%s"
+                        % (stem, g0, g0 + 9, len(labels), ", %d unreadable" % bad if bad else ""))
+            return done
+
+        with ThreadPoolExecutor(min(2, workers, len(shards))) as pool:
+            done = [path for block in pool.map(shard, shards) for path in block]
+        log("  imagenet-r: %d pictures -> imr.parquet" % _write_parts(done, C.INET_DIR / "imr.parquet"))
+
+    if not (C.INET_DIR / "sketch.parquet").exists():
+        url = "datasets/%s/data/ImageNet-Sketch.zip" % C.SKETCH_REPO
+        with fs.open(url, "rb", block_size=2 ** 20) as handle:
+            members = [i for i in zipfile.ZipFile(handle).infolist() if not i.is_dir()]
+        #  The same file under several classes -- a 1,303-byte placeholder
+        #  under 4, one 4,723-byte image under 7, "maillot" vs "maillot tank
+        #  suit" -- can be right under one label at most: 102 duplicate groups
+        #  (224 files) among the sketches first chosen. Every copy goes.
+        copies = collections.Counter((m.CRC, m.file_size) for m in members)
+        members = [m for m in members if copies[(m.CRC, m.file_size)] == 1]
+        by_class: dict = {}
+        for m in sorted(members, key=lambda m: m.header_offset):
+            wnid = m.filename.split("/")[-2]
+            if wnid in index and index[wnid] not in skip:
+                by_class.setdefault(index[wnid], []).append(m.filename)
+        #  The first SKETCH_PER_CLASS in zip order: contiguous, so the 8 MB
+        #  read-ahead fetches a class in one or two requests.
+        classes = sorted(by_class)
+        blocks = [classes[k:k + 25] for k in range(0, len(classes), 25)]
+
+        def block(k):
+            saved = parts / ("sketch-%03d.parquet" % k)
+            want = {c: min(C.SKETCH_PER_CLASS, len(by_class[c])) for c in blocks[k]}
+            if saved.exists():
+                #  A block saved by the first version could have lost sketches to
+                #  a network error (its except covered the read too): only a
+                #  block holding every sketch it should is kept.
+                have = collections.Counter(pq.read_table(saved, columns=["label"])
+                                           .column("label").to_pylist())
+                if all(have[c] >= n for c, n in want.items()):
+                    return saved
+                log("  imagenet-sketch: block %d short -- fetching it again" % (k + 1))
+            images, labels, bad = [], [], 0
+            with fs.open(url, "rb", block_size=2 ** 23) as handle:
+                z = zipfile.ZipFile(handle)
+                for c in blocks[k]:
+                    for name in by_class[c][:C.SKETCH_PER_CLASS]:
+                        try:
+                            blob = z.read(name)         # network errors propagate: retried
+                        except (zipfile.BadZipFile, NotImplementedError):
+                            bad += 1
+                            continue
+                        try:
+                            images.append(_square256(blob))
+                        except Exception:                             # noqa: BLE001
+                            bad += 1                    # a picture PIL cannot read
+                            continue
+                        labels.append(c)
+            _save_part(images, labels, saved)
+            log("  imagenet-sketch: block %d/%d -- %d sketches%s"
+                % (k + 1, len(blocks), len(labels), ", %d unreadable" % bad if bad else ""))
+            return saved
+
+        with ThreadPoolExecutor(workers) as pool:
+            done = list(pool.map(block, range(len(blocks))))
+        log("  imagenet-sketch: %d sketches -> sketch.parquet"
+            % _write_parts(done, C.INET_DIR / "sketch.parquet"))
+
+
+def have_renditions() -> bool:
+    return all((C.INET_DIR / ("%s.parquet" % s)).exists() for s in ("imr", "sketch"))
+
+
+def renditions(source: str, part: str, seed: int = C.SEED):
+    """source "imr" | "sketch", part "train" | "test" -> (vocabulary indices,
+    ids). A hash of each row decides test (REND_TEST_SHARE) or train."""
+    names, inet = image_vocabulary(), imagenet_names()
+    labels = _inet_table(source).column("label").to_numpy()
+    skip = _rendition_excluded()
+    keep = [i for i in range(len(labels)) if int(labels[i]) not in skip
+            and (_held_out("%s:%d" % (source, i), seed) < C.REND_TEST_SHARE) == (part == "test")]
+    vocab = np.asarray([names.index(inet[int(labels[i])]) for i in keep], np.int64)
+    return vocab, ["inet-%s:%d" % (source, i) for i in keep]
+
+
+def renditions_stamp() -> str:
+    import hashlib
+    parts = [str(sorted(_rendition_excluded())), str((C.SKETCH_PER_CLASS, C.REND_TEST_SHARE, C.SEED)),
+             "dedup-crc"]
+    for split in ("imr", "sketch"):
+        path = C.INET_DIR / ("%s.parquet" % split)
+        parts.append(str(path.stat().st_size if path.exists() else "missing"))
     return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
 
 
@@ -799,6 +1024,98 @@ def _unused_more_sounds_v1(part: str, seed: int = C.SEED):
     return np.asarray(labels, np.int64), ids
 
 
+# ---------------------------------------------------------------------------
+# VGGSound (round 7): a third recording source -- YouTube -- for names v2.B
+# already has. Only the audio is fetched, never the 26 GB of video beside it.
+# ---------------------------------------------------------------------------
+
+
+def _vgg_root() -> Path | None:
+    snaps = sorted(C.VGGSOUND_CACHE.glob("datasets--%s/snapshots/*"
+                                         % C.VGGSOUND_REPO.replace("/", "--")))
+    return snaps[-1] if snaps else None
+
+
+def _vgg_rows() -> list[tuple[str, str]]:
+    """(clip id, VGGSound label) for every row of the metadata, in file order.
+    file_name is video/<clip>/video.mp4; the audio is audio/<clip>/audio.wav."""
+    if "vgg" not in _SND:
+        with open(_vgg_root() / "metadata.csv", newline="", encoding="utf-8") as handle:
+            _SND["vgg"] = [(row["file_name"].split("/")[1], row["text"])
+                           for row in csv.DictReader(handle)]
+    return _SND["vgg"]
+
+
+def _vgg_marker() -> Path:
+    return C.VGGSOUND_CACHE / "v2b_vggsound_fetched.json"
+
+
+def fetch_vggsound(log=print, workers: int = 8) -> None:
+    """The wav of every clip VGGSOUND_NAMES keeps (~3.8 GB at 16 kHz), into
+    VGGSOUND_CACHE. Resumable: files already there are skipped. A marker lists
+    what the repo did not have, so have_vggsound() can tell done from partial."""
+    import json
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    from huggingface_hub import hf_hub_download
+
+    def get(name):
+        return hf_hub_download(C.VGGSOUND_REPO, name, repo_type="dataset",
+                               cache_dir=str(C.VGGSOUND_CACHE))
+
+    get("metadata.csv")
+    _SND.pop("vgg", None)
+    root = _vgg_root()
+    todo = [clip for clip, label in _vgg_rows() if label in C.VGGSOUND_NAMES
+            and not (root / "audio" / clip / "audio.wav").exists()]
+    missing = []
+
+    def one(clip):
+        try:
+            get("audio/%s/audio.wav" % clip)
+        except Exception as error:                            # noqa: BLE001
+            if "404" not in str(error) and "EntryNotFound" not in type(error).__name__:
+                raise
+            missing.append(clip)
+
+    log("  vggsound: %d clips to fetch" % len(todo))
+    with ThreadPoolExecutor(workers) as pool:
+        for i, _ in enumerate(pool.map(one, todo)):
+            if i % 500 == 0:
+                log("  vggsound: %d/%d" % (i, len(todo)))
+    _vgg_marker().write_text(json.dumps({"missing": sorted(missing)}))
+    log("  vggsound: done, %d not in the repo" % len(missing))
+
+
+def have_vggsound() -> bool:
+    return bool(C.VGGSOUND_NAMES) and _vgg_root() is not None and _vgg_marker().exists()
+
+
+def vggsound(exclude_youtube: set, seed: int = C.SEED):
+    """-> (vocabulary indices, ids "vgg:<clip>"): every kept clip that is here
+    and whose YouTube video is in none of our AudioSet splits (an AudioSet test
+    clip and a VGGSound training clip can be cut from one video), in a stable
+    hash-shuffled order."""
+    slot = _sound_slot()
+    root = _vgg_root()
+    rows = [(clip, label) for clip, label in _vgg_rows() if label in C.VGGSOUND_NAMES
+            and clip.rsplit("_", 1)[0] not in exclude_youtube
+            and (root / "audio" / clip / "audio.wav").exists()]
+    rows.sort(key=lambda r: _held_out(r[0], seed))
+    labels = np.asarray([slot[C.VGGSOUND_NAMES[label]] for _, label in rows], np.int64)
+    return labels, ["vgg:%s" % clip for clip, _ in rows]
+
+
+def vggsound_stamp(exclude_youtube: set) -> str:
+    import hashlib
+    parts = [str(sorted(C.VGGSOUND_NAMES.items())), str(len(exclude_youtube)),
+             hashlib.sha1("|".join(sorted(exclude_youtube)).encode()).hexdigest(),
+             str((C.SOUND_SECONDS, C.SEED)),
+             _vgg_marker().read_text() if _vgg_marker().exists() else "unfetched"]
+    return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+
 def more_waves(sources: list[str]) -> list[np.ndarray]:
     """Decode these clips to float32 mono at AUDIO_SAMPLE_RATE."""
     import io
@@ -814,6 +1131,14 @@ def more_waves(sources: list[str]) -> list[np.ndarray]:
     column = {"aset": "opus", "fsd": "audio", "asetu": "opus"}
     out = []
     for source in sources:
+        if source.startswith("vgg:"):
+            wave, rate = soundfile.read(_vgg_root() / "audio" / source[4:] / "audio.wav",
+                                        dtype="float32")
+            if wave.ndim > 1:
+                wave = wave.mean(axis=1)
+            wave = np.asarray(wave[:int(C.SOUND_SECONDS * rate)], np.float32)
+            out.append(_resample(wave, int(rate), C.AUDIO_SAMPLE_RATE))
+            continue
         kind, name, row = source.split(":")[:3]
         key = (kind, name)
         if key not in _SND:

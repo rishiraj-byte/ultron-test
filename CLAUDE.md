@@ -26,11 +26,14 @@ ventral stream, Depth Anything V2 Small as parietal, LAION CLAP as temporal with
 an arcuate path to frontal, SigLIP 2 text as frontal with 1,629 names), a 3.30M
 trained circuit, a hippocampus with a RAG database and a familiarity gate, an
 amygdala that gates motor (GO / HOLD + confidence), no language model. Image,
-audio and video only -- no text input. Trained on 178,792 pictures (CIFAR-100,
-Tiny-ImageNet, 782 ImageNet classes as photos) and 58,209 sounds (ESC-50,
-AudioSet, FSD50K), with label smoothing + feature dropout. Test: CIFAR-100 91.2%,
-Tiny-ImageNet 87.9%, ImageNet photos 84.4%, ESC-50 87.5% (was 95.2% before the
-broad sound data), AudioSet 35.2%, FSD50K 65.8%. Train with `--candidate` so a
+audio and video only -- no text input. Deployed: round 9 (8 epochs). Trained on
+281,155 pictures (CIFAR-100, Tiny-ImageNet, 782 ImageNet classes as 144 photos
+each, ImageNet-R art/toys, ImageNet-Sketch) and 58,209 sounds (ESC-50, AudioSet,
+FSD50K; VGGSound is encoded but off -- it hurt every sound test), with label
+smoothing + feature dropout. Test: CIFAR-100 91.4%, Tiny-ImageNet 88.4%,
+ImageNet photos 86.4%, ImageNet-R 94.7%, Sketch 75.5%, ESC-50 89.5%, AudioSet
+35.9%, FSD50K 65.9%; never-trained classes 73.3% (untrained 79.5%, falling every
+round -- the open regression). Train with `--candidate` so a
 run never overwrites the deployed model. `python -m v2b.train --watch` shows training live; `--refit`
 redoes everything after the cortex. Checks: `python -m v2b.verify_v2b` (42).
 See `v2b/README.md`.

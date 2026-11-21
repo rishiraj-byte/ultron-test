@@ -1,0 +1,26 @@
+# Test pictures (Wikimedia Commons)
+Each file: what it is, author, licence, source page.
+- **01_trained_golden_retriever.jpg** -- photo -- trained class. Dietmar Rabich, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:D%C3%BClmen,_Hausd%C3%BClmen,_Golden_Retriever_--_2022_--_5945.jpg
+- **02_trained_tabby_cat.jpg** -- photo -- trained class. Basile Morin, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Cat_playing_with_a_lizard.jpg
+- **03_trained_red_panda.jpg** -- photo -- trained class (ImageNet 'lesser panda'). H. Zell, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Ailurus_fulgens_-_Karlsruhe_Zoo_01.jpg
+- **04_trained_school_bus.jpg** -- photo -- trained class. Ktkvtsh, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Ouachita_Parish_Schools_school_bus_at_Swartz_Elementary.jpeg
+- **05_trained_acoustic_guitar.jpg** -- photo -- trained class. Martin Möller, CC BY-SA 2.0 de. https://commons.wikimedia.org/wiki/File:Classical_Guitar_two_views.jpg
+- **06_trained_pizza.jpg** -- photo -- trained class. Mario56, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Margherita_Originale.JPG
+- **07_trained_lighthouse.jpg** -- photo -- trained class (ImageNet 'beacon'). Marco Leiter, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Leuchtturm_in_Westerheversand_crop.jpg
+- **08_trained_african_elephant.jpg** -- photo -- trained class. Charles J. Sharp, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:African_bush_elephants_(Loxodonta_africana)_female_with_six-week-old_baby.jpg
+- **09_trained_hot_air_balloon.jpg** -- photo -- trained class (ImageNet 'balloon'). Tomascastelazo, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Hot_air_balloon_and_moon.jpg
+- **10_trained_sunflower.jpg** -- photo -- trained class (CIFAR). George Chernilevsky, CC BY 4.0. https://commons.wikimedia.org/wiki/File:Sunflower_head_2026_G1.jpg
+- **11_never_trained_church.jpg** -- photo -- NEVER trained (Imagenette). Krzysztof Kundzicz, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Podlaskie_-_Mo%C5%84ki_-_Mo%C5%84ki_-_ul._Ks._Ma%C5%82ynicza_1-_Ko%C5%9Bci%C3%B3%C5%82_pw._Matki_Boskiej_Cz%C4%99stochowskiej_-_lbok.JPG
+- **12_never_trained_parachute.jpg** -- photo -- NEVER trained (Imagenette). Roy Egloff, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:CH.VD.Bex_2007-09-02_Airshow_396_16x9-R_5120x2880_(cropped).jpg
+- **13_never_trained_french_horn.png** -- photo -- NEVER trained (Imagenette). BenP, CC BY 2.5. https://commons.wikimedia.org/wiki/File:French_horn_front.png
+- **14_never_trained_garbage_truck.jpg** -- photo -- NEVER trained (Imagenette). Dllu, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Recology_Lodal_Garbage_Truck_14425_in_San_Francisco.jpg
+- **15_never_trained_golf_ball.jpg** -- photo -- NEVER trained (Imagenette). Acabashi, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:Golf_ball_on_grass_in_Willingale_Essex.jpg
+- **16_rendition_painting_sunflowers.jpg** -- painting -- Van Gogh. Vincent van Gogh, Public domain. https://commons.wikimedia.org/wiki/File:Vincent_Willem_van_Gogh_128.jpg
+- **17_rendition_horse_drawing.jpg** -- drawing -- horse. John Phillip, Public domain. https://commons.wikimedia.org/wiki/File:Horse_and_Foal_-_John_Phillip_-_ABDAG014484.77.jpg
+- **18_rendition_teddy_bear.jpg** -- plush toy -- teddy bear. Miquel Angel  Pintanel Bassets, CC BY-SA 2.0. https://commons.wikimedia.org/wiki/File:Angry_teddy_bear.jpg
+- **19_rendition_lion_sculpture.jpg** -- stone sculpture -- lion. Bernard Gagnon, CC BY-SA 3.0. https://commons.wikimedia.org/wiki/File:Ifrane_lion.jpg
+- **20_rendition_origami_crane.jpg** -- origami -- crane (bird). Laitche, Public domain. https://commons.wikimedia.org/wiki/File:Cranes_made_by_Origami_paper.jpg
+- **21_rendition_cartoon_cat.jpg** -- cartoon -- cat. Samuel Harper Muldoon, born in the year 1992, born in the city of Laramie in the, CC BY-SA 4.0. https://commons.wikimedia.org/wiki/File:A_Cartoon_of_a_White_and_Brown_Cat.jpg
+- **22_tricky_dog_and_cat.jpg** -- photo -- two animals at once. unknown, Public domain. https://commons.wikimedia.org/wiki/File:Cat_and_dog_sleeping_together.jpeg
+- **23_tricky_quadcopter_drone.jpg** -- photo -- NO name for it in the vocabulary. Josh Sorenson, CC0. https://commons.wikimedia.org/wiki/File:Quadcopter_camera_drone_in_flight.jpg
+- **24_tricky_strawberry_closeup.jpg** -- photo -- trained class, unusual close-up. Deviations with Ray, CC BY 2.0. https://commons.wikimedia.org/wiki/File:A_macro_of_a_strawberry.jpg
